@@ -110,10 +110,10 @@ def get_price_tencent(code: str) -> float | None:
 
 
 def get_price(code: str) -> float | None:
-    """获取最新价，优先 akshare，兜底腾讯"""
-    price = get_price_akshare(code)
+    """获取最新价，优先腾讯 ，兜底akshare"""
+    price = get_price_tencent(code)
     if price is None:
-        price = get_price_tencent(code)
+        price = get_price_akshare(code)
     return price
 
 
