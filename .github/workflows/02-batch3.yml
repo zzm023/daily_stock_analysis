@@ -25,7 +25,7 @@ on:
 
 # 并发控制：同一时间只运行一个分析任务
 concurrency:
-  group: stock-analysis_3
+  group: stock-analysis_batch3
   cancel-in-progress: false
 
 jobs:
