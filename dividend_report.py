@@ -23,7 +23,7 @@ DIV = {
     "000848": {"name": "承德露露", "dps": 0.44, "anchor": 5.5},
 }
 
-CUTOFF = (datetime.now() - timedelta(days=540)).date()
+CUTOFF = (datetime.now() - timedelta(days=365)).date()
 
 
 def parse_date(v):
