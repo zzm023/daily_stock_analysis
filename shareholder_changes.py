@@ -37,25 +37,29 @@ def fetch_anns(code):
     end = now.strftime("%Y-%m-%d")
     all_rows = []
     for page in range(1, 6):
-        url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
-        params = {
-            "sr": "-1", "page_size": "50", "page_index": str(page),
-            "ann_type": "A", "client_source": "web",
-            "stock_list": code, "f_node": "0", "s_node": "0",
-            "begin_time": start, "end_time": end,
-        }
         try:
-            r = requests.get(url, params=params, timeout=15)
+            r = requests.get(
+                "https://np-anotice-stock.eastmoney.com/api/security/ann",
+                params={
+                    "sr": "-1", "page_size": "50", "page_index": str(page),
+                    "ann_type": "A", "client_source": "web",
+                    "stock_list": code, "f_node": "0", "s_node": "0",
+                    "begin_time": start, "end_time": end,
+                }, timeout=15
+            )
             d = r.json()
-            # 兼容两种返回格式
-            data = d.get("data", {})
-            if isinstance(data, dict):
-                data = data.get("list", [])
-            elif not isinstance(data, list):
-                data = []
+            raw = d.get("data", [])
+            if isinstance(raw, dict):
+                data = raw.get("list", [])
+            elif isinstance(raw, list):
+                data = raw
+            else:
+                break
             if not data:
                 break
-            all_rows.extend(data)
+            for item in data:
+                if isinstance(item, dict):
+                    all_rows.append(item)
             if len(data) < 50:
                 break
         except Exception as e:
@@ -63,11 +67,11 @@ def fetch_anns(code):
             break
     return all_rows
 
+
 def fetch_text(art_code):
-    """东财公告PDF文本"""
     try:
         r = requests.get(
-            f"https://np-anotice-stock.eastmoney.com/api/security/ann/detail",
+            "https://np-anotice-stock.eastmoney.com/api/security/ann/detail",
             params={"art_code": str(art_code)},
             headers={"User-Agent": "Mozilla/5.0"}, timeout=15
         )
@@ -81,7 +85,7 @@ def clean(text):
 
 
 def extract_summary(text, title=""):
-    """只从包含关键词的段落提取，不走全文"""
+    """从含关键词的段落提取数字"""
     raw = clean(text)
     paragraphs = [p.strip() for p in re.split(r'\n\s*\n|\n{2,}', raw) if len(p.strip()) > 20]
 
@@ -133,10 +137,8 @@ def main():
         matched = 0
         for a in anns:
             title = str(a.get("notice_title", ""))
-            # 噪声跳过
             if any(k in title for k in ["激励","授予","回购注销","回购实施","理财产品","闲置资金"]):
                 continue
-            # 关键词匹配
             if not any(k in title for k in KEYWORDS):
                 continue
             art_code = a.get("art_code", "")
@@ -159,7 +161,7 @@ def main():
 
     hits.sort(key=lambda x: x["date"], reverse=True)
     lines = [f"## 📢 增减持+质押+解禁 — {now:%Y.%m.%d}", "",
-             f"> 近7天 ｜ 标题命中+段落精准提取 ｜ {now:%m-%d %H:%M}", f"> 共{len(hits)}条", ""]
+             f"> 近7天 ｜ 标题+段落提取 ｜ {now:%m-%d %H:%M}", f"> 共{len(hits)}条", ""]
 
     for h in hits:
         lines.append(f"### {h['name']}({h['code']}) ｜ {h['date']}")
