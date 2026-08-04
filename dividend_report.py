@@ -80,7 +80,7 @@ def get_dividend(code):
             if attempt == 2:
                 print(f"  {code} 失败: {e}")
             else:
-                time.sleep(5 * (attempt + 1))
+                 time.sleep(2 * (attempt + 1))
     return 0
 
 
@@ -109,7 +109,7 @@ def main():
         print(f"  {i+1}/52 {s['name']}: {dv:.2f}%")
         if s["anchor"] and dv < s["anchor"]:
             alarm.append((s, dv))
-        time.sleep(0.3)
+        time.sleep(0.1)
 
     lines.append("### 🚨 跌破防守锚")
     if alarm:
