@@ -38,7 +38,6 @@ def fetch_announcements(codes_str):
 
 
 def get_pdf_url(art_code):
-    """正文API返回PDF链接"""
     try:
         r = requests.get(CONTENT_URL, params={"art_code": art_code, "client_source": "web", "page_index": 1},
                          headers=HEADERS, timeout=15)
@@ -70,7 +69,6 @@ def parse_pdf(url):
 
 
 def fetch_content(art_code):
-    """拿PDF地址→下载→解析文字"""
     url = get_pdf_url(art_code) if art_code else ""
     if url:
         return parse_pdf(url)
@@ -83,6 +81,7 @@ def extract_summary(text):
     sentences = [s.strip() for s in re.split(r"[。；;]", text) if s.strip()]
     picks = []
 
+    # 解禁类（regex: group1=数字 group2=单位）
     for s in sentences:
         if "解禁" not in s and "解除限售" not in s and "限售股" not in s:
             continue
@@ -91,11 +90,12 @@ def extract_summary(text):
         if m_qty or m_pct:
             parts = []
             if m_qty:
-                parts.append(f"{m_qty.group(2) or ''}{m_qty.group(3) or ''}股")
+                parts.append(f"{m_qty.group(1)}{m_qty.group(2) or ''}股")
             if m_pct:
                 parts.append(f"占总股本{m_pct.group(1)}%")
             picks.append(f"解禁{'、'.join(parts)}")
 
+    # 质押类
     for s in sentences:
         if "质押" not in s:
             continue
@@ -106,13 +106,14 @@ def extract_summary(text):
             parts = []
             kind = "解除质押" if "解除质押" in s else "质押"
             if m_qty:
-                parts.append(f"{m_qty.group(2) or ''}{m_qty.group(3) or ''}股")
+                parts.append(f"{m_qty.group(1)}{m_qty.group(2) or ''}股")
             if m_own:
                 parts.append(f"占其持{m_own.group(1)}%")
             if m_total:
                 parts.append(f"占总股本{m_total.group(1)}%")
             picks.append(f"{kind}{'、'.join(parts)}")
 
+    # 增减持类（regex: group1=不超过 group2=数字 group3=单位）
     for s in sentences:
         if ("减持" not in s and "增持" not in s) or "质押" in s:
             continue
