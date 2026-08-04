@@ -54,7 +54,13 @@ def fetch_anns(code):
         try:
             r = requests.get(url, params=params, timeout=15)
             d = r.json()
-            data = d.get("data", {}).get("list", []) or d.get("data", [])
+            raw = d.get("data", {})
+            if isinstance(raw, dict):
+                data = raw.get("list", [])
+            elif isinstance(raw, list):
+                data = [x for x in raw if isinstance(x, dict)]
+            else:
+                break
             if not data:
                 break
             all_rows.extend(data)
