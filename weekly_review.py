@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-每周复盘：52只框架股票 PE / PB / 距触发价 汇总
-数据源：新浪财经 (hq.sinajs.cn) — akshare被GitHub Actions封IP
-推送：PushPlus
-"""
-
 import requests
 import re
 import os
@@ -86,7 +80,8 @@ ATTR_LABEL = {
 
 
 def fetch_all_stocks():
-    """新浪接口：批量获取行情"""
+    """新浪接口：批量获取行情（失败重试3次）"""
+    import time
     codes = list(set(s["code"] for s in STOCKS))
     symbols = []
     for code in codes:
@@ -100,27 +95,34 @@ def fetch_all_stocks():
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i+batch_size]
         url = "https://hq.sinajs.cn/list=" + ",".join(batch)
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            resp.encoding = "gbk"
-            for line in resp.text.strip().split("\n"):
-                m = re.search(r'hq_str_(\w+)="(.+)"', line)
-                if not m:
-                    continue
-                sym = m.group(1)
-                fields = m.group(2).split(",")
-                code = sym[2:]
-                try:
-                    price = float(fields[3]) if fields[3] else 0
-                    pe = float(fields[39]) if len(fields)>39 and fields[39] else 0
-                    pb = float(fields[42]) if len(fields)>42 and fields[42] else 0
-                    lookup[code] = {"最新价": price, "市盈率-动态": pe, "市净率": pb}
-                except (ValueError, IndexError):
-                    pass
-            count = sum(1 for s in batch if s[2:] in lookup)
-            print(f"  批次{i//batch_size+1}: {count}/{len(batch)}")
-        except Exception as e:
-            print(f"  批次{i//batch_size+1} 失败: {e}")
+        for attempt in range(3):
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+                resp.encoding = "gbk"
+                for line in resp.text.strip().split("\n"):
+                    m = re.search(r'hq_str_(\w+)="(.+)"', line)
+                    if not m:
+                        continue
+                    sym = m.group(1)
+                    fields = m.group(2).split(",")
+                    code = sym[2:]
+                    try:
+                        price = float(fields[3]) if fields[3] else 0
+                        pe = float(fields[39]) if len(fields)>39 and fields[39] else 0
+                        pb = float(fields[42]) if len(fields)>42 and fields[42] else 0
+                        lookup[code] = {"最新价": price, "市盈率-动态": pe, "市净率": pb}
+                    except (ValueError, IndexError):
+                        pass
+                count = sum(1 for s in batch if s[2:] in lookup)
+                print(f"  批次{i//batch_size+1}: {count}/{len(batch)}")
+                break
+            except Exception as e:
+                if attempt < 2:
+                    wait = (attempt + 1) * 10
+                    print(f"  批次{i//batch_size+1} 失败, {wait}秒后重试...")
+                    time.sleep(wait)
+                else:
+                    print(f"  批次{i//batch_size+1} 最终失败: {e}")
 
     print(f"  总计获取 {len(lookup)}/52 只")
     return lookup
