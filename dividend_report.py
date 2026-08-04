@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""股息率周报：自动拉分红（除以10校正）+ 现价（新浪）
+"""股息率周报：自动拉分红（÷10校正）+ 现价（新浪）
 每周一 08:00 CST
 """
 import requests
 import re
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type
 
 DIV = {
     "600036": {"name": "招商银行", "dps": 2.10, "anchor": 6.0},
@@ -23,48 +23,53 @@ DIV = {
     "000848": {"name": "承德露露", "dps": 0.44, "anchor": 5.5},
 }
 
-CUTOFF = datetime.now() - timedelta(days=540)
+CUTOFF = (datetime.now() - timedelta(days=540)).date()
 
 
 def parse_date(v):
-    if v is None or (hasattr(v, "strftime") and getattr(v, "_repr_base", None) == "NaT"):
+    """兼容 datetime / date / NaT / NaN / str"""
+    if v is None:
         return None
-    if hasattr(v, "strftime"):
-        return v if isinstance(v, datetime) else None
+    # NaT / NaN: self != self
+    try:
+        if v != v:
+            return None
+    except TypeError:
+        return None
+    # datetime or date
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date_type):
+        return v
+    # string
     s = str(v).strip()[:19]
     for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d", "%Y%m%d"):
         try:
-            return datetime.strptime(s, fmt)
+            return datetime.strptime(s, fmt).date()
         except ValueError:
             continue
     return None
 
 
-def fetch_dps(code, debug=False):
+def fetch_dps(code):
     """akshare拉近18个月分红（派息÷10=每股）"""
     try:
         import akshare as ak
         df = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
         if df is None or df.empty:
             return None, "空"
-        if debug:
-            print(f"  [DEBUG] {code} 列: {list(df.columns)}")
-            for i in range(min(3, len(df))):
-                r = df.iloc[i]
-                print(f"  [DEBUG]  行{i}: 除权={r.get('除权除息日')!r} 公告={r.get('公告日期')!r} 派息={r.get('派息')!r}")
 
         total, found = 0.0, 0
         for _, r in df.iterrows():
-            dd = (parse_date(r.get("除权除息日")) or
-                  parse_date(r.get("股权登记日")) or
-                  parse_date(r.get("公告日期")) or
-                  parse_date(r.get("ANNOUNCEMENT_DATE")))
-            if dd is None:
+            result = (parse_date(r.get("除权除息日")) or
+                      parse_date(r.get("股权登记日")) or
+                      parse_date(r.get("公告日期")))
+            if result is None:
                 continue
-            if dd >= CUTOFF:
+            if result >= CUTOFF:
                 try:
                     val = float(r.get("派息", 0) or 0)
-                    total += val / 10.0  # 元/10股 → 元/股
+                    total += val / 10.0
                     found += 1
                 except (ValueError, TypeError):
                     pass
@@ -111,16 +116,17 @@ def main():
     print(f"[START] 股息率周报 {now:%Y-%m-%d %H:%M}")
 
     rows = []
-    for first_code, v in DIV.items():
-        debug = (first_code == "600036")
-        dps, src = fetch_dps(first_code, debug=debug)
+    for code, v in DIV.items():
+        dps, src = fetch_dps(code)
+        if code == "600036" and dps is not None:
+            print(f"  [OK] 招商银行DPS={dps} [{src}]")
         if dps is None:
             dps = v["dps"]
-            src = f"兜底({src})" if src else "兜底"
-        price = fetch_price(first_code)
+            src = f"兜底({src})"
+        price = fetch_price(code)
         yld = (dps / price * 100) if price > 0 else 0
         gap = v["anchor"] - yld
-        rows.append((v["name"], first_code, price, dps, src, yld, v["anchor"], gap))
+        rows.append((v["name"], code, price, dps, src, yld, v["anchor"], gap))
         print(f"  {v['name']}: DPS={dps:.3f}[{src}] 价={price:.2f} 息率={yld:.2f}%")
 
     rows.sort(key=lambda x: -x[5])
