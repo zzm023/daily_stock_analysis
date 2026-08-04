@@ -24,7 +24,8 @@ STOCKS = [
 
 KEYWORDS = ["增持", "减持", "权益变动", "质押", "解禁", "限售"]
 # 激励计划类噪音：限制性股票回购注销等，非真实增减持/解禁
-NOISE_TITLE = ["回购注销", "限制性股票激励", "股权激励计划", "激励对象"]
+NOISE_TITLE = ["回购注销", "限制性股票激励", "股权激励计划", "激励对象",
+               "分派", "派息", "分红"]
 ANNO_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 CONTENT_URL = "https://np-cnotice-stock.eastmoney.com/api/content/ann"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -137,6 +138,10 @@ def extract_summary(text, title=""):
         if not (m_qty or m_pct):
             continue
         if re.search(r"(增持|减持)(前|后)持股|变动(前|后)|期末持股", s):
+            continue
+        if re.search(r"每\s*10\s*股", s):
+            continue
+        if re.search(r"(不得|未|无|承诺)(减持|增持)", s):
             continue
         score = sum(1 for kw in ["本次", "拟", "计划", "累计", "已完成"] if kw in s)
         qty = f"{m_qty.group(2)}{m_qty.group(3) or ''}股" if m_qty else ""
