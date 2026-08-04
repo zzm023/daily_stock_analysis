@@ -37,7 +37,6 @@ def to_float(v):
 
 
 def fetch_schedule():
-    """兼容akshare新旧版本的披露日程接口"""
     for fn_name in ("stock_report_disclosure", "stock_report_disclosure_em", "stock_disclosure_schedule"):
         f = getattr(ak, fn_name, None)
         if f is None:
@@ -62,7 +61,6 @@ def fetch_schedule():
 
 
 def fetch_yjkb(report_date):
-    """业绩快报：含扣非"""
     try:
         df = ak.stock_yjkb_em(date=report_date)
         if df is None or df.empty:
@@ -72,6 +70,9 @@ def fetch_yjkb(report_date):
             code = str(r.get("股票代码", "")).zfill(6)
             if code not in CODE2NAME:
                 continue
+            if code in ("600299", "002032"):
+                print(f"  [DEBUG] {code} 快报原始列: {list(df.columns)}")
+                print(f"  [DEBUG] {code} 快报原始值: {r.to_dict()}")
             out[code] = {
                 "rev": to_float(r.get("营业总收入")),
                 "rev_g": to_float(r.get("营业总收入-同比增长")),
@@ -90,7 +91,6 @@ def fetch_yjkb(report_date):
 
 
 def fetch_yjbb(report_date):
-    """业绩报表：兜底（无扣非）"""
     try:
         df = ak.stock_yjbb_em(date=report_date)
         if df is None or df.empty:
@@ -117,7 +117,6 @@ def fetch_yjbb(report_date):
 
 
 def fetch_yjyg(report_date):
-    """业绩预告"""
     try:
         df = ak.stock_yjyg_em(date=report_date)
         if df is None or df.empty:
@@ -172,7 +171,6 @@ def main():
     today = now.date()
     print(f"[START] 财报日历+业绩分析 {now:%Y-%m-%d %H:%M}")
 
-    # 1. 披露日程
     sched = {}
     try:
         df = fetch_schedule()
@@ -188,7 +186,6 @@ def main():
     except Exception as e:
         print(f"  披露日程失败: {e}")
 
-    # 2. 本期数据：快报优先（含扣非），报表兜底
     yjkb = fetch_yjkb("20260630")
     yjbb = fetch_yjbb("20260630")
     data = {}
@@ -199,18 +196,15 @@ def main():
             data[code] = yjbb[code]
     print(f"  本期财务 {len(data)} 只（快报{len(yjkb)}/报表{len(yjbb)}）")
 
-    # 3. 去年同期报表（算ROE/毛利率同比）
     ly_map = {}
     ly = fetch_yjbb("20250630")
     for code, v in ly.items():
         ly_map[code] = {"roe": v.get("roe"), "gm": v.get("gm")}
     print(f"  去年同期 {len(ly_map)} 只")
 
-    # 4. 业绩预告
     yjyg = fetch_yjyg("20260630")
     print(f"  业绩预告 {len(yjyg)} 只")
 
-    # 5. 组装
     reported, upcoming = [], []
     for code, name, attr in STOCKS:
         d = sched.get(code, "")
@@ -226,14 +220,13 @@ def main():
     upcoming.sort()
     reported.sort(key=lambda x: x[3].get("date", ""))
 
-    # 6. 报告
     lines = [f"## 📅 财报日历+半年报分析 — {now:%Y.%m.%d}", "",
              f"> 已披露 {len(reported)} 只 ｜ 未来30天披露 {len(upcoming)} 只", ""]
 
     if reported:
-        lines.append("### 📊 已披露半年报")
-        lines.append("| 股票 | 营收 | 营收同比 | 净利 | 净利同比 | 扣非 | 扣非同比 | ROE | ROE同比 | 毛利率 | 毛利率同比 | 简析 |")
-        lines.append("|------|------|---------|------|---------|------|---------|-----|---------|--------|-----------|------|")
+        lines.append("### 📊 已披露半年报｜成长")
+        lines.append("| 股票 | 营收(亿) | 营收同比 | 净利(亿) | 净利同比 | 扣非(亿) | 扣非同比 |")
+        lines.append("|------|---------|---------|---------|---------|---------|---------|")
         for code, name, attr, y, l in reported:
             rev = f"{y['rev']:.1f}" if y["rev"] is not None else "-"
             rev_g = f"{y['rev_g']:+.1f}%" if y["rev_g"] is not None else "-"
@@ -241,12 +234,18 @@ def main():
             pf_g = f"{y['profit_g']:+.1f}%" if y["profit_g"] is not None else "-"
             kf = f"{y['kf']:.1f}" if y["kf"] is not None else "-"
             kf_g = f"{y['kf_g']:+.1f}%" if y["kf_g"] is not None else "-"
+            lines.append(f"| {name} | {rev} | {rev_g} | {pf} | {pf_g} | {kf} | {kf_g} |")
+        lines.append("")
+        lines.append("### 📊 已披露半年报｜质量+简析")
+        lines.append("| 股票 | ROE | ROE同比 | 毛利率 | 毛利率同比 | 简析 |")
+        lines.append("|------|-----|---------|--------|-----------|------|")
+        for code, name, attr, y, l in reported:
             roe = f"{y['roe']:.1f}%" if y["roe"] is not None else "-"
             gm = f"{y['gm']:.1f}%" if y["gm"] is not None else "-"
             roe_g = f"{y['roe'] - l['roe']:+.1f}pp" if (y["roe"] is not None and l.get("roe") is not None) else "-"
             gm_g = f"{y['gm'] - l['gm']:+.1f}pp" if (y["gm"] is not None and l.get("gm") is not None) else "-"
             a = analyze(CODE2ATTR[code], y["rev_g"], y["kf_g"] if y["kf_g"] is not None else y["profit_g"])
-            lines.append(f"| {name} | {rev} | {rev_g} | {pf} | {pf_g} | {kf} | {kf_g} | {roe} | {roe_g} | {gm} | {gm_g} | {a} |")
+            lines.append(f"| {name} | {roe} | {roe_g} | {gm} | {gm_g} | {a} |")
         lines.append("")
 
     if upcoming:
