@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-大宗商品价格监控 v4 — 全akshare方案
-使用东方财富数据源，避免新浪/100ppi IP封禁
+大宗商品价格监控 v5 — 修正akshare函数名 + 自适应列名
 """
 
 import requests
@@ -60,71 +59,77 @@ PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 DATA_FILE = Path(__file__).parent / "commodity_prices.json"
 
 
-def get_price_via_akshare(name, cfg):
-    """使用akshare内置函数获取价格"""
+def get_price_via_futures(code):
+    """用akshare期货接口获取主力合约收盘价"""
     try:
         import akshare as ak
-
-        # 方式1：通过期货日线获取（有futures_code的品种）
-        if "futures_code" in cfg:
+        # 尝试多个函数名（不同版本兼容）
+        for func_name in ["futures_zh_daily_sina", "futures_zh_daily"]:
             try:
-                df = ak.futures_zh_daily_sina(symbol=cfg["futures_code"])
-                if df is not None and len(df) > 0:
+                func = getattr(ak, func_name)
+                df = func(symbol=code)
+                if df is None or len(df) == 0:
+                    continue
+                # 自适应列名
+                cols = [c.lower() for c in df.columns]
+                original_cols = list(df.columns)
+                close_col = None
+                date_col = None
+                for orig, low in zip(original_cols, cols):
+                    if low in ("close", "收盘价", "收盘", "f_close"):
+                        close_col = orig
+                    if low in ("date", "日期", "trade_date", "datetime"):
+                        date_col = orig
+                if close_col is None:
+                    # 模糊匹配：含"收"的列
+                    for orig in original_cols:
+                        if "收" in orig:
+                            close_col = orig
+                            break
+                if close_col:
                     latest = df.iloc[-1]
-                    close = float(latest["收盘价"])
-                    return {"price": close, "date": str(latest["日期"]), "change_pct": None}
-            except Exception as e:
-                print(f"    [akshare futures_zh] {cfg['futures_code']} 失败: {e}")
-
-        # 方式2：尝试期货现货价格函数
-        try:
-            today_str = date.today().strftime("%Y%m%d")
-            df = ak.futures_spot_price(symbol=name, date=today_str)
-            if df is not None and len(df) > 0:
-                for _, row in df.iterrows():
-                    spot_price = row.get("现货价格") or row.get("spot_price")
-                    if spot_price and float(spot_price) > 0:
-                        return {"price": float(spot_price), "date": today_str, "change_pct": None}
-        except Exception:
-            pass
-
+                    close_val = float(latest[close_col])
+                    date_val = str(latest[date_col])[:10] if date_col else str(date.today())
+                    if close_val > 0:
+                        return {"price": close_val, "date": date_val, "change_pct": None}
+            except Exception:
+                continue
     except Exception as e:
-        print(f"    [akshare] 异常: {e}")
+        print(f"    [akshare] {code} 异常: {e}")
     return None
 
 
-def get_price_via_eastmoney(symbol):
-    """东方财富主力合约行情 — 救急备用"""
+def get_price_via_eastmoney(code):
+    """东方财富主力合约"""
     try:
         url = "https://push2.eastmoney.com/api/qt/stock/get"
-        params = {
-            "secid": f"113.{symbol}",
-            "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f60,f169,f170",
-        }
+        params = {"secid": f"113.{code}", "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f60"}
         resp = requests.get(url, params=params, timeout=10)
         data = resp.json().get("data", {})
         price = data.get("f43", 0) / 100 if data.get("f43") else 0
         if price > 0:
-            return {"price": price, "date": str(date.today()), "change_pct": None}
+            prev = data.get("f60", 0) / 100 if data.get("f60") else 0
+            chg = (price - prev) / prev if prev > 0 else 0
+            return {"price": price, "date": str(date.today()), "change_pct": round(chg, 4)}
     except Exception:
         pass
     return None
 
 
 def get_commodity_price(name, cfg):
-    # 1. akshare主方案
-    result = get_price_via_akshare(name, cfg)
-    if result:
-        print(f"    [akshare] ✅")
-        return result
-
-    # 2. 东方财富备用
     if "futures_code" in cfg:
-        result = get_price_via_eastmoney(cfg["futures_code"])
+        code = cfg["futures_code"]
+        # 1. akshare
+        result = get_price_via_futures(code)
+        if result:
+            print(f"    [akshare] ✅")
+            return result
+        # 2. 东方财富
+        result = get_price_via_eastmoney(code)
         if result:
             print(f"    [东方财富] ✅")
             return result
-
+    # 现货品种：无API
     return None
 
 
@@ -154,28 +159,31 @@ def pushplus_send(title, content):
 
 
 def should_check_today(cfg):
-    if cfg.get("level") == "daily":
-        return True
-    return datetime.now().weekday() == 0
+    return cfg.get("level") == "daily" or datetime.now().weekday() == 0
 
 
 def main():
     today = datetime.now()
     wd = ['一','二','三','四','五','六','日']
-    print(f"=== 大宗商品监控 v4 | {today.strftime('%Y-%m-%d %H:%M')} 周{wd[today.weekday()]} ===")
+    print(f"=== 大宗商品监控 v5 | {today.strftime('%Y-%m-%d %H:%M')} 周{wd[today.weekday()]} ===")
 
     history = load_history()
     alerts, weekly_items = [], []
-    all_data, ok, fail = {}, 0, 0
+    all_data, ok, fail, nosrc = {}, 0, 0, 0
 
     for name, cfg in COMMODITIES.items():
         if not should_check_today(cfg):
             all_data[name] = history.get(name, {})
             continue
-
         print(f"\n[{name}] ...")
-        result = get_commodity_price(name, cfg)
 
+        if "futures_code" not in cfg:
+            print(f"  ⚠️ 现货品种，无API数据源")
+            nosrc += 1
+            all_data[name] = history.get(name, {})
+            continue
+
+        result = get_commodity_price(name, cfg)
         if result is None:
             print(f"  ❌ 失败")
             fail += 1
@@ -202,7 +210,7 @@ def main():
             weekly_items.append(record)
 
     save_history(all_data)
-    print(f"\n{'='*40}\n成功 {ok} / 失败 {fail}")
+    print(f"\n{'='*40}\n✅{ok} ❌{fail} ⚠️无源{nosrc}")
 
     if not alerts and not weekly_items:
         print("无告警无周报，不推送")
@@ -223,18 +231,10 @@ def main():
         lines.append("|---|---|---|")
         for it in weekly_items:
             lines.append(f"| {it.get('_name','')} | {it['price']:,.0f} {it['unit']} | {it['stocks']} |")
-        daily = [f"| {n} | {d['price']:,.0f} {COMMODITIES[n]['unit']} | {d['stocks']} |"
-                 for n,d in all_data.items() if COMMODITIES.get(n,{}).get('level')=='daily' and d]
-        if daily:
-            lines.append("\n### 每日快照")
-            lines.append("| 商品 | 现价 | 影响 |")
-            lines.append("|---|---|---|")
-            lines.extend(daily)
         lines.append("")
-    lines.append(f"---\n⏰ {today.strftime('%Y-%m-%d %H:%M')} | ✅{ok}/❌{fail}")
+    lines.append(f"---\n⏰ {today.strftime('%Y-%m-%d %H:%M')} | ✅{ok} ❌{fail} ⚠️{nosrc}")
 
-    title = "⚡ 商品告警" if alerts else "📋 商品周报"
-    pushplus_send(title, "\n".join(lines))
+    pushplus_send("⚡ 商品告警" if alerts else "📋 商品周报", "\n".join(lines))
     print("\n✅ 完成")
 
 
