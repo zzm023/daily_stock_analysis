@@ -75,8 +75,8 @@ def fetch_dps(code):
                     pass
 
         if found > 0 and total > 0:
-            return round(total, 3), f"18M({found}条)"
-        return None, f"18M无(共{len(df)}条)"
+            return round(total, 3), f"12M({found}条)"
+        return None, f"12M无(共{len(df)}条)"
     except Exception as e:
         return None, str(e)[:60]
 
@@ -131,7 +131,7 @@ def main():
 
     rows.sort(key=lambda x: -x[5])
     lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
-             f"> DPS：18M实派 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", "",
+             f"> DPS：12M实派 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", "",
              "| 股票 | 现价 | DPS | 股息率 | 锚定 | 距锚定 |",
              "|------|------|-----|--------|------|--------|"]
 
