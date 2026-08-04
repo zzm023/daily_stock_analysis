@@ -1,55 +1,71 @@
 #!/usr/bin/env python3
-"""股息率周报：价格走腾讯 + DPS分红表硬算（东财/乐咕在GitHub Actions被墙）
-每周五 20:00 推送 ｜ DPS以2024年报为基准，除权后人工更新
+"""股息率周报：自动拉12个月分红DPS（akshare拉取 + 硬编码兜底）
+每周一 08:00 CST
 """
+import akshare as ak
 import requests
-import re
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# ========== 框架防守锚（①永续债/②高息成长 + 特殊锚） ==========
-# DPS = 每股分红（元，含中期分红）；anchor = 股息率锚（%）
-# ⚠️ 标"待确认"的请按你实际掌握的分红数据更新
+# 13只高息标的（兜底DPS，运行时优先用akshare拉真实12月分红）
 DIV = {
-     "600036": {"name": "招商银行", "dps": 2.10, "anchor": 6.0},   # 框架息6%+ → 买点35.00=触发价
-    "601601": {"name": "中国太保", "dps": 1.02, "anchor": 3.4},   # 非股息锚定(PE/P-EV驱动) 待确认DPS
-    "600018": {"name": "上港集团", "dps": 0.18, "anchor": 3.8},   # 待确认DPS
-    "601816": {"name": "京沪高铁", "dps": 0.12, "anchor": 2.5},   # 非股息锚定(永续经营驱动)
-    "600900": {"name": "长江电力", "dps": 0.85, "anchor": 4.0},   # 锚:息率≥4% → 买点21.25
-    "600941": {"name": "中国移动", "dps": 5.35, "anchor": 5.5},   # 锚:息率≥5.5% → 买点97.27(触发价90更严)
-    "600406": {"name": "国电南瑞", "dps": 0.25, "anchor": 1.3},   # 非股息锚定(电网垄断驱动)
-    "600598": {"name": "北大荒",   "dps": 0.44, "anchor": 3.8},   # 待确认DPS
-    "603568": {"name": "伟明环保", "dps": 0.50, "anchor": 3.4},   # 待确认DPS
-    "600007": {"name": "中国国贸", "dps": 0.98, "anchor": 5.6},   # 框架息5.6% → 买点17.50=触发价
-    "000429": {"name": "粤高速A",  "dps": 0.61, "anchor": 5.8},   # 框架息5.8% → 买点10.52=触发价
-    "000895": {"name": "双汇发展", "dps": 1.32, "anchor": 6.0},   # 框架息6% → 买点22.00=触发价
-    "000848": {"name": "承德露露", "dps": 0.44, "anchor": 5.5},   # 框架息5.5% → 买点8.00=触发价
+    "600036": {"name": "招商银行", "dps": 2.10, "anchor": 6.0},
+    "601601": {"name": "中国太保", "dps": 1.02, "anchor": 3.4},
+    "600018": {"name": "上港集团", "dps": 0.18, "anchor": 3.8},
+    "601816": {"name": "京沪高铁", "dps": 0.12, "anchor": 2.5},
+    "600900": {"name": "长江电力", "dps": 0.85, "anchor": 4.0},
+    "600941": {"name": "中国移动", "dps": 5.35, "anchor": 5.5},
+    "600406": {"name": "国电南瑞", "dps": 0.25, "anchor": 1.3},
+    "600598": {"name": "北大荒",   "dps": 0.44, "anchor": 3.8},
+    "603568": {"name": "伟明环保", "dps": 0.50, "anchor": 3.4},
+    "600007": {"name": "中国国贸", "dps": 0.98, "anchor": 5.6},
+    "000429": {"name": "粤高速A",  "dps": 0.61, "anchor": 5.8},
+    "000895": {"name": "双汇发展", "dps": 1.32, "anchor": 6.0},
+    "000848": {"name": "承德露露", "dps": 0.44, "anchor": 5.5},
 }
 
+HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.eastmoney.com/"}
 
-def get_prices(codes):
-    """腾讯批量拉价格，秒回"""
-    symbols = []
-    for c in codes:
-        p = "sh" if c.startswith("6") else "sz"
-        symbols.append(f"{p}{c}")
-    out = {}
-    for i in range(0, len(symbols), 50):
-        url = "http://qt.gtimg.cn/q=" + ",".join(symbols[i:i+50])
-        try:
-            resp = requests.get(url, timeout=15)
-            resp.encoding = "gbk"
-            for line in resp.text.strip().split("\n"):
-                m = re.search(r'v_(\w+)="(.+)"', line)
-                if m:
-                    f = m.group(2).split("~")
-                    try:
-                        out[m.group(1)[2:]] = float(f[3])
-                    except:
-                        pass
-        except Exception as e:
-            print(f"价格批次失败: {e}")
-    return out
+
+def fetch_latest_dps(code, fallback):
+    """akshare拉近12个月每股派息；失败回退兜底"""
+    try:
+        df = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
+        if df is None or df.empty:
+            return fallback, "兜底"
+        cutoff = datetime.now() - timedelta(days=365)
+        total = 0.0
+        for _, r in df.iterrows():
+            date_str = str(r.get("除权除息日", ""))[:10]
+            try:
+                dd = datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if dd >= cutoff:
+                try:
+                    total += float(r.get("每股派息", 0) or 0)
+                except (ValueError, TypeError):
+                    pass
+        if total > 0:
+            return total, "12M实派"
+    except Exception as e:
+        print(f"  {code} DPS拉取失败: {e}")
+    return fallback, "兜底"
+
+
+def fetch_price(code):
+    """push2取现价"""
+    secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
+    try:
+        r = requests.get(
+            "https://push2.eastmoney.com/api/qt/stock/get",
+            params={"secid": secid, "fields": "f43"},
+            headers=HEADERS, timeout=10
+        )
+        d = r.json()
+        return float(d.get("data", {}).get("f43", 0)) / 100
+    except Exception:
+        return 0
 
 
 def push(title, content):
@@ -58,49 +74,56 @@ def push(title, content):
     if not token:
         print("[WARN] 无TOKEN"); return
     payload = {"token": token, "title": title, "content": content, "template": "markdown"}
-    if topic: payload["topic"] = topic
+    if topic:
+        payload["topic"] = topic
     r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
     print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
 
 
 def main():
-    print(f"[START] {datetime.now()}")
-    codes = list(DIV.keys())
-    prices = get_prices(codes)
     now = datetime.now()
+    print(f"[START] 股息率周报 {now:%Y-%m-%d %H:%M}")
 
-    lines = [f"## 💰 股息率周报 — {now.strftime('%Y.%m.%d')}", "",
-             f"> 股息率 = DPS ÷ 现价 ｜ 锚为买入触发线 ｜ {now.strftime('%m-%d %H:%M')}", ""]
-    alarm, rows = [], []
-    for c, d in DIV.items():
-        price = prices.get(c, 0)
-        if not price:
-            rows.append((d["name"], None, d["anchor"], "-", "价格未获取"))
-            continue
-        yield_pct = d["dps"] / price * 100
-        buy_price = d["dps"] / (d["anchor"] / 100)  # 锚对应的买入价
-        rows.append((d["name"], yield_pct, d["anchor"], price, buy_price))
-        if yield_pct < d["anchor"]:
-            alarm.append((d["name"], yield_pct, d["anchor"], buy_price))
+    rows = []
+    for code, v in DIV.items():
+        dps, source = fetch_latest_dps(code, v["dps"])
+        price = fetch_price(code)
+        yld = (dps / price * 100) if price > 0 else 0
+        gap = v["anchor"] - yld
+        rows.append((v["name"], code, price, dps, source, yld, v["anchor"], gap))
+        print(f"  {v['name']}: DPS={dps:.2f}[{source}] 价={price:.2f} 息率={yld:.2f}% 距锚{gap:+.1f}pp")
 
-    lines.append("### 🚨 未达防守锚（买点未到）")
-    if alarm:
-        for n, y, a, bp in alarm:
-            lines.append(f"- **{n}** 现息 {y:.1f}% < 锚 {a:.0f}% ｜ 需跌至 ≤{bp:.2f}")
-    else:
-        lines.append("- 全部达标 ✅")
-    lines.append("")
-    lines.append("| 股票 | 现价 | 股息率 | 防守锚 | 买点价 | 状态 |")
-    lines.append("|------|------|--------|--------|--------|------|")
-    for n, y, a, price, bp in rows:
-        if y is None:
-            lines.append(f"| {n} | - | - | {a}% | - | ⚠️ 未获取 |")
-        else:
-            st = "✅" if y >= a else "🔴"
-            lines.append(f"| {n} | {price:.2f} | {y:.1f}% | {a:.0f}% | {bp:.2f} | {st} |")
+    rows.sort(key=lambda x: -x[5])  # 按股息率降序
 
-    push(f"💰 股息率周报 {now.strftime('%Y.%m.%d')}", "\n".join(lines))
-    print("[DONE]")
+    lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
+             f"> 12个月实派DPS（akshare）｜ 兜底硬编码 ｜ {now:%m-%d %H:%M}", "",
+             "| 股票 | 现价 | DPS | 来源 | 股息率 | 锚定 | 距锚定 |",
+             "|------|------|-----|------|--------|------|--------|"]
+
+    for name, code, price, dps, src, yld, anchor, gap in rows:
+        ps = f"{price:.2f}" if price else "-"
+        dp = f"{dps:.2f}" if dps else "-"
+        ys = f"{yld:.2f}%" if yld else "-"
+        gs = f"🟢 差{gap:+.1f}pp" if gap > 0 else (f"● 超额{-gap:.1f}pp" if gap < 0 else "🎯 持平")
+        lines.append(f"| {name} | {ps} | {dp} | {src} | {ys} | {anchor:.1f}% | {gs} |")
+
+    close_list = [(name, gap, yld) for name, _, _, _, _, yld, anchor, gap in rows if gap > 0 and gap <= 0.5]
+    triggered = [(name, gap, yld) for name, _, _, _, _, yld, anchor, gap in rows if gap <= 0]
+
+    if triggered:
+        lines.append("")
+        lines.append("### 🔴 已触发（股息率≥锚定）")
+        for name, gap, yld in triggered:
+            lines.append(f"- {name}：{yld:.2f}%（超额{-gap:.1f}pp）")
+
+    if close_list:
+        lines.append("")
+        lines.append("### 🟡 接近触发（≤0.5pp）")
+        for name, gap, yld in close_list:
+            lines.append(f"- {name}：{yld:.2f}%，差{gap:.1f}pp")
+
+    push(f"💰 股息率周报 {now:%Y.%m.%d}", "\n".join(lines))
+    print(f"[DONE] {len(rows)} 只")
 
 
 if __name__ == "__main__":
