@@ -22,7 +22,7 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install akshare requests
+          pip install requests
 
       - name: 运行每周复盘
         env:
