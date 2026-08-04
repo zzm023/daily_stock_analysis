@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install akshare requests
-      - run: python dividend_report.py
+      - run: python -u dividend_report.py
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
