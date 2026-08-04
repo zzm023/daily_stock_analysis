@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""股息率周报：自动拉12个月分红DPS + 现价
+"""股息率周报：自动拉分红 + 现价（新浪）
 每周一 08:00 CST
 """
 import requests
-import os
 import re
+import os
 from datetime import datetime, timedelta
 
 DIV = {
@@ -23,69 +23,67 @@ DIV = {
     "000848": {"name": "承德露露", "dps": 0.44, "anchor": 5.5},
 }
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+def parse_date(s):
+    """尝试多种日期格式"""
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(str(s).strip()[:19], fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def fetch_dps(code):
-    """akshare拉分红，失败返回(None, 错误信息)"""
+    """akshare拉分红；失败返回None"""
     try:
         import akshare as ak
         df = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
         if df is None or df.empty:
-            return None, "DataFrame为空"
-        cutoff = datetime.now() - timedelta(days=365)
-        total = 0.0
-        found = 0
+            return None, "空"
+        if code == "600036":
+            print(f"  [DEBUG] 招商银行分红列: {list(df.columns)}")
+            print(f"  [DEBUG] 招商银行首行: {df.iloc[0].to_dict()}")
+        cutoff = datetime.now() - timedelta(days=540)  # 18个月宽窗口
+        total, found, skipped = 0.0, 0, 0
         for _, r in df.iterrows():
-            date_str = str(r.get("除权除息日", "") or r.get("EX_DIVIDEND_DATE", ""))[:10]
-            try:
-                dd = datetime.strptime(date_str, "%Y-%m-%d")
-            except ValueError:
+            date_val = (r.get("除权除息日") or r.get("EX_DIVIDEND_DATE") or
+                        r.get("除息日") or r.get("公告日期") or r.get("ANNOUNCEMENT_DATE") or "")
+            dd = parse_date(date_val)
+            if dd is None:
+                skipped += 1
                 continue
             if dd >= cutoff:
                 try:
-                    val = float(r.get("每股派息", 0) or r.get("CASH_DIVIDEND", 0) or 0)
+                    val = float(r.get("每股派息", 0) or r.get("CASH_DIVIDEND", 0) or
+                               r.get("每股股利", 0) or 0)
                     total += val
                     found += 1
                 except (ValueError, TypeError):
                     pass
         if found > 0 and total > 0:
-            return total, None
-        return None, f"12个月内无分红记录(找到{found}条)"
+            return total, f"18M({found}条)"
+        return None, f"18M内无(共{len(df)}条,跳过{skipped})"
     except Exception as e:
         return None, str(e)[:60]
 
 
 def fetch_price(code):
-    """push2取现价，失败回退新浪"""
-    secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
+    """新浪取现价"""
+    prefix = "sh" if code.startswith("6") else "sz"
     for attempt in range(3):
         try:
-            r = requests.get(
-                "https://push2.eastmoney.com/api/qt/stock/get",
-                params={"secid": secid, "fields": "f43,f57,f58"},
-                headers=HEADERS, timeout=10
-            )
-            if attempt == 0:
-                print(f"  [DEBUG] {code} push2: {r.text[:200]}")
-            d = r.json()
-            price = float(d.get("data", {}).get("f43", 0)) / 100
-            if price > 0:
-                return price
+            r = requests.get(f"https://hq.sinajs.cn/list={prefix}{code}",
+                             headers={"Referer": "https://finance.sina.com.cn"}, timeout=10)
+            r.encoding = "gbk"
+            m = re.search(r'="(.+?)"', r.text)
+            if m:
+                price = float(m.group(1).split(",")[3])
+                if price > 0:
+                    return price
         except Exception:
-            pass
-
-    # 新浪兜底
-    prefix = "sh" if code.startswith("6") else "sz"
-    try:
-        r = requests.get(f"https://hq.sinajs.cn/list={prefix}{code}",
-                         headers={"Referer": "https://finance.sina.com.cn"}, timeout=10)
-        r.encoding = "gbk"
-        m = re.search(r'="(.+?)"', r.text)
-        if m:
-            return float(m.group(1).split(",")[3])
-    except Exception:
-        pass
+            if attempt < 2:
+                import time; time.sleep(2)
     return 0
 
 
@@ -107,46 +105,43 @@ def main():
 
     rows = []
     for code, v in DIV.items():
-        # DPS：自动拉 + 兜底
-        dps, err = fetch_dps(code)
-        source = "12M实派"
+        dps, src = fetch_dps(code)
         if dps is None:
             dps = v["dps"]
-            source = f"兜底({err})" if err else "兜底"
-        # 现价
+            src = f"兜底({src})" if src else "兜底"
         price = fetch_price(code)
         yld = (dps / price * 100) if price > 0 else 0
         gap = v["anchor"] - yld
-        rows.append((v["name"], code, price, dps, source, yld, v["anchor"], gap))
-        print(f"  {v['name']}: DPS={dps:.2f}[{source}] 价={price:.2f} 息率={yld:.2f}% 距锚{gap:+.1f}pp")
+        rows.append((v["name"], code, price, dps, src, yld, v["anchor"], gap))
+        print(f"  {v['name']}: DPS={dps:.2f}[{src}] 价={price:.2f} 息率={yld:.2f}%")
 
     rows.sort(key=lambda x: -x[5])
 
     lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
-             f"> DPS：akshare 12M实派 / 兜底硬编码 ｜ {now:%m-%d %H:%M}", "",
-             "| 股票 | 现价 | DPS | 来源 | 股息率 | 锚定 | 距锚定 |",
-             "|------|------|-----|------|--------|------|--------|"]
+             f"> DPS：18M实派 / 兜底 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", "",
+             "| 股票 | 现价 | DPS | 股息率 | 锚定 | 距锚定 |",
+             "|------|------|-----|--------|------|--------|"]
 
     for name, code, price, dps, src, yld, anchor, gap in rows:
         ps = f"{price:.2f}" if price else "-"
         dp = f"{dps:.2f}" if dps else "-"
         ys = f"{yld:.2f}%" if yld else "-"
         gs = f"🟢 差{gap:+.1f}pp" if gap > 0 else (f"● 超额{-gap:.1f}pp" if gap < 0 else "🎯 持平")
-        lines.append(f"| {name} | {ps} | {dp} | {src} | {ys} | {anchor:.1f}% | {gs} |")
+        lines.append(f"| {name} | {ps} | {dp} | {ys} | {anchor:.1f}% | {gs} |")
 
     triggered = [(name, gap, yld) for name, _, _, _, _, yld, _, gap in rows if gap <= 0]
     close = [(name, gap, yld) for name, _, _, _, _, yld, _, gap in rows if gap > 0 and gap <= 0.5]
 
     if triggered:
         lines.append("")
-        lines.append("### 🔴 已触发（股息率≥锚定）")
-        for name, gap, yld in triggered:
-            lines.append(f"- {name}：{yld:.2f}%（超额{-gap:.1f}pp）")
+        lines.append("### 🔴 已触发")
+        for n, g, y in triggered:
+            lines.append(f"- {n}：{y:.2f}%（超额{-g:.1f}pp）")
     if close:
         lines.append("")
-        lines.append("### 🟡 接近触发（≤0.5pp）")
-        for name, gap, yld in close:
-            lines.append(f"- {name}：{yld:.2f}%，差{gap:.1f}pp")
+        lines.append("### 🟡 接近触发")
+        for n, g, y in close:
+            lines.append(f"- {n}：{y:.2f}%，差{g:.1f}pp")
 
     push(f"💰 股息率周报 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"[DONE] {len(rows)} 只")
