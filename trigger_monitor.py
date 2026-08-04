@@ -1,229 +1,246 @@
+#!/usr/bin/env python3
+"""财报日历 + 半年报财务数据提取分析（快报+报表+新浪扣非）
+数据源：akshare｜ 每周一 08:30
 """
-触发价监控脚本
-用途：扫描52只框架股票，价格触及买入线 → PushPlus 推送
-用法：python price_monitor.py
-环境变量：PUSHPLUS_TOKEN（必填）、PUSHPLUS_TOPIC（可选）
-"""
-
+import akshare as ak
 import os
-import json
-import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# ========== 52只框架股票触发价（来源：framework_stocks.md） ==========
 STOCKS = [
-    # 优先1
-    {"code": "000651", "name": "格力电器",   "trigger": 38.00, "attr": "④全球寡头"},
-    {"code": "000157", "name": "中联重科",   "trigger": 7.00,  "attr": "③周期拐点"},
-    {"code": "600036", "name": "招商银行",   "trigger": 35.00, "attr": "①永续债"},
-    {"code": "601601", "name": "中国太保",   "trigger": 30.00, "attr": "①永续债"},
-    {"code": "000895", "name": "双汇发展",   "trigger": 22.00, "attr": "②高息成长"},
-    {"code": "600018", "name": "上港集团",   "trigger": 4.80,  "attr": "①永续债"},
-    {"code": "601816", "name": "京沪高铁",   "trigger": 4.80,  "attr": "①永续债"},
-    {"code": "600900", "name": "长江电力",   "trigger": None,  "attr": "①永续债", "note": "息率≥4%"},
-    {"code": "600941", "name": "中国移动",   "trigger": 90.00, "attr": "①永续债"},
-    {"code": "002027", "name": "分众传媒",   "trigger": 5.26,  "attr": "⑤品牌心智"},
-    {"code": "600066", "name": "宇通客车",   "trigger": 27.00, "attr": "④全球寡头"},
-    {"code": "000538", "name": "云南白药",   "trigger": 47.00, "attr": "⑤品牌心智"},
-    {"code": "300832", "name": "新产业",     "trigger": 40.00, "attr": "科技绿"},
-    {"code": "688187", "name": "时代电气",   "trigger": 46.00, "attr": "科技绿"},
-    {"code": "603605", "name": "珀莱雅",     "trigger": 55.00, "attr": "⑤品牌心智"},
-    {"code": "605098", "name": "行动教育",   "trigger": 48.00, "attr": "⑤品牌心智"},
-    {"code": "603568", "name": "伟明环保",   "trigger": 14.50, "attr": "①永续债候补"},
-    {"code": "000708", "name": "中信特钢",   "trigger": 13.50, "attr": "④全球寡头候补"},
-    {"code": "002884", "name": "凌霄泵业",   "trigger": 15.00, "attr": "⑥小众冠军"},
-    {"code": "600007", "name": "中国国贸",   "trigger": 17.50, "attr": "①永续债候补"},
-    # 优先2
-    {"code": "000333", "name": "美的集团",   "trigger": 68.00, "attr": "④全球寡头"},
-    {"code": "600690", "name": "海尔智家",   "trigger": 20.00, "attr": "④全球寡头"},
-    {"code": "600031", "name": "三一重工",   "trigger": 17.00, "attr": "④全球寡头"},
-    {"code": "600309", "name": "万华化学",   "trigger": 68.00, "attr": "④全球寡头"},
-    {"code": "600585", "name": "海螺水泥",   "trigger": None,  "attr": "③周期拐点", "note": "PB≤0.55"},
-    {"code": "000792", "name": "盐湖股份",   "trigger": 25.00, "attr": "③周期拐点"},
-    {"code": "603288", "name": "海天味业",   "trigger": 30.00, "attr": "⑥小众冠军"},
-    {"code": "600298", "name": "安琪酵母",   "trigger": 35.00, "attr": "⑤品牌心智"},
-    {"code": "000429", "name": "粤高速A",    "trigger": 10.50, "attr": "①永续债观察"},
-    {"code": "600406", "name": "国电南瑞",   "trigger": 20.00, "attr": "①永续债"},
-    {"code": "600660", "name": "福耀玻璃",   "trigger": 50.00, "attr": "④全球寡头"},
-    {"code": "300628", "name": "亿联网络",   "trigger": 33.00, "attr": "⑤品牌心智"},
-    {"code": "600161", "name": "天坛生物",   "trigger": 11.50, "attr": "⑥小众冠军候补"},
-    {"code": "600598", "name": "北大荒",     "trigger": 11.50, "attr": "①永续债"},
-    {"code": "002318", "name": "久立特材",   "trigger": 17.50, "attr": "⑥小众冠军"},
-    {"code": "603855", "name": "华荣股份",   "trigger": 15.20, "attr": "⑥小众冠军"},
-    # 优先3
-    {"code": "002032", "name": "苏泊尔",     "trigger": 40.00, "attr": "⑤品牌心智候补"},
-    {"code": "002508", "name": "老板电器",   "trigger": 14.05, "attr": "⑤品牌心智"},
-    {"code": "600761", "name": "安徽合力",   "trigger": 16.50, "attr": "④全球寡头"},
-    {"code": "600486", "name": "扬农化工",   "trigger": 52.00, "attr": "④全球寡头"},
-    {"code": "600188", "name": "兖矿能源",   "trigger": 15.50, "attr": "③周期拐点"},
-    {"code": "000848", "name": "承德露露",   "trigger": 8.00,  "attr": "②高息成长"},
-    {"code": "601058", "name": "赛轮轮胎",   "trigger": 12.00, "attr": "④全球寡头"},
-    {"code": "603508", "name": "思维列控",   "trigger": 21.60, "attr": "⑥小众冠军"},
-    # 优先4-5
-    {"code": "002601", "name": "龙佰集团",   "trigger": 13.50, "attr": "③周期拐点候补"},
-    {"code": "603806", "name": "福斯特",     "trigger": 13.50, "attr": "④全球寡头"},
-    {"code": "600299", "name": "安迪苏",     "trigger": 7.60,  "attr": "③周期拐点候补"},
-    # 观察/X
-    {"code": "300124", "name": "汇川技术",   "trigger": 47.00, "attr": "科技观察"},
-    {"code": "002837", "name": "英维克",     "trigger": 43.00, "attr": "科技观察"},
-    {"code": "300627", "name": "华测导航",   "trigger": 26.50, "attr": "科技观察"},
-    {"code": "002410", "name": "广联达",     "trigger": 8.50,  "attr": "科技观察"},
-    {"code": "300498", "name": "温氏股份",   "trigger": None,  "attr": "③周期观察", "note": "待定"},
+    ("600036","招商银行","①"),("601601","中国太保","①"),("600018","上港集团","①"),("601816","京沪高铁","①"),
+    ("600900","长江电力","①"),("600941","中国移动","①"),("600406","国电南瑞","①"),("600598","北大荒","①"),
+    ("603568","伟明环保","①"),("600007","中国国贸","①"),("000429","粤高速A","①"),("000895","双汇发展","②"),
+    ("000848","承德露露","②"),("000157","中联重科","③"),("600585","海螺水泥","③"),("000792","盐湖股份","③"),
+    ("600188","兖矿能源","③"),("002601","龙佰集团","③"),("600299","安迪苏","③"),("300498","温氏股份","③"),
+    ("000651","格力电器","④"),("600066","宇通客车","④"),("000333","美的集团","④"),("600690","海尔智家","④"),
+    ("600031","三一重工","④"),("600309","万华化学","④"),("600660","福耀玻璃","④"),("600761","安徽合力","④"),
+    ("600486","扬农化工","④"),("601058","赛轮轮胎","④"),("603806","福斯特","④"),("000708","中信特钢","④"),
+    ("002027","分众传媒","⑤"),("000538","云南白药","⑤"),("603605","珀莱雅","⑤"),("605098","行动教育","⑤"),
+    ("600298","安琪酵母","⑤"),("300628","亿联网络","⑤"),("002508","老板电器","⑤"),("002032","苏泊尔","⑤"),
+    ("002884","凌霄泵业","⑥"),("002318","久立特材","⑥"),("603855","华荣股份","⑥"),("603288","海天味业","⑥"),
+    ("603508","思维列控","⑥"),("600161","天坛生物","⑥"),("300832","新产业","⚡"),("688187","时代电气","⚡"),
+    ("300124","汇川技术","⚡"),("002837","英维克","⚡"),("300627","华测导航","⚡"),("002410","广联达","⚡"),
 ]
+CODE2NAME = {c: n for c, n, _ in STOCKS}
+CODE2ATTR = {c: a for c, _, a in STOCKS}
+ATTR_LABEL = {"①": "永续债", "②": "高息", "③": "周期", "④": "寡头", "⑤": "品牌", "⑥": "小众", "⚡": "科技"}
 
-# ========== 价格获取 ==========
 
-def get_price_akshare(code: str) -> float | None:
-    """通过 akshare 获取实时/收盘价"""
+def to_float(v):
+    if v is None:
+        return None
+    s = str(v).replace(",", "").replace("%", "").replace("元", "").replace("亿", "").replace("万", "").strip()
     try:
-        import akshare as ak
-        df = ak.stock_zh_a_spot_em()
-        row = df[df["代码"] == code]
+        return float(s)
+    except ValueError:
+        return None
+
+
+def fetch_yjkb(report_date):
+    try:
+        df = ak.stock_yjkb_em(date=report_date)
+        if df is None or df.empty:
+            return {}
+        out = {}
+        for _, r in df.iterrows():
+            code = str(r.get("股票代码", "")).zfill(6)
+            if code not in CODE2NAME:
+                continue
+            out[code] = {
+                "rev": to_float(r.get("营业收入-营业收入")),
+                "rev_g": to_float(r.get("营业收入-同比增长")),
+                "profit": to_float(r.get("净利润-净利润")),
+                "profit_g": to_float(r.get("净利润-同比增长")),
+                "roe": to_float(r.get("净资产收益率")),
+                "gm": None,
+                "date": str(r.get("公告日期", ""))[:10],
+            }
+        return out
+    except Exception as e:
+        print(f"  业绩快报失败: {e}")
+        return {}
+
+
+def fetch_yjbb(report_date):
+    try:
+        df = ak.stock_yjbb_em(date=report_date)
+        if df is None or df.empty:
+            return {}
+        out = {}
+        for _, r in df.iterrows():
+            code = str(r.get("股票代码", "")).zfill(6)
+            if code not in CODE2NAME:
+                continue
+            out[code] = {
+                "rev": to_float(r.get("营业总收入-营业总收入")),
+                "rev_g": to_float(r.get("营业总收入-同比增长")),
+                "profit": to_float(r.get("净利润-净利润")),
+                "profit_g": to_float(r.get("净利润-同比增长")),
+                "roe": to_float(r.get("净资产收益率")),
+                "gm": to_float(r.get("销售毛利率")),
+                "date": str(r.get("最新公告日期", ""))[:10],
+            }
+        return out
+    except Exception as e:
+        print(f"  业绩报表失败: {e}")
+        return {}
+
+
+def fetch_yjyg(report_date):
+    try:
+        df = ak.stock_yjyg_em(date=report_date)
+        if df is None or df.empty:
+            return {}
+        out = {}
+        for _, r in df.iterrows():
+            code = str(r.get("股票代码", "")).zfill(6)
+            if code in CODE2NAME and code not in out:
+                out[code] = f"{r.get('预告类型','')} {r.get('净利润变动幅度','')}"
+        return out
+    except Exception as e:
+        print(f"  业绩预告失败: {e}")
+        return {}
+
+
+def fetch_kf(code):
+    try:
+        df = ak.stock_financial_abstract(symbol=code)
+        if df is None or df.empty:
+            return None, None
+        row = df[df["指标"] == "扣非净利润"]
         if row.empty:
-            return None
-        return float(row.iloc[0]["最新价"])
+            return None, None
+        cols = list(df.columns)
+        cur_col = next((c for c in cols if str(c) == "20260630"), None)
+        ly_col = next((c for c in cols if str(c) == "20250630"), None)
+        cur = to_float(row.iloc[0].get(cur_col)) if cur_col else None
+        ly = to_float(row.iloc[0].get(ly_col)) if ly_col else None
+        if cur is not None and ly not in (None, 0):
+            return cur, (cur - ly) / abs(ly) * 100
+        return cur, None
     except Exception as e:
-        print(f"  ⚠ akshare 获取 {code} 失败: {e}")
-        return None
+        print(f"  {code} 扣非失败: {e}")
+        return None, None
 
 
-def get_price_tencent(code: str) -> float | None:
-    """腾讯行情接口兜底"""
-    try:
-        import requests
-        if code.startswith("6"):
-            full = f"sh{code}"
-        else:
-            full = f"sz{code}"
-        url = f"http://qt.gtimg.cn/q={full}"
-        resp = requests.get(url, timeout=5)
-        resp.encoding = "gbk"
-        text = resp.text
-        if "~" not in text:
-            return None
-        parts = text.split("~")
-        if len(parts) < 4:
-            return None
-        return float(parts[3])
-    except Exception:
-        return None
+def analyze(attr, rev_g, profit_g):
+    if profit_g is None:
+        return "-"
+    if attr == "③":
+        if profit_g > 0 and rev_g and rev_g > 0:
+            return "🔄 量利齐升·拐点信号"
+        if profit_g > 0:
+            return "🔄 净利转正"
+        return "⏳ 周期底部"
+    if attr == "①":
+        if profit_g < -10:
+            return "⚠️ 盈利下滑"
+        return "✅ 稳定"
+    if rev_g and profit_g < -10 and rev_g > 5:
+        return "⚠️ 增收不增利"
+    if profit_g > 20:
+        return "🟢 高增长"
+    if profit_g < -20:
+        return "🔴 大幅下滑"
+    return "🟢 增长" if profit_g >= 0 else "🟡 小幅下滑"
 
 
-def get_price(code: str) -> float | None:
-    """获取最新价，优先腾讯 ，兜底akshare"""
-    price = get_price_tencent(code)
-    if price is None:
-        price = get_price_akshare(code)
-    return price
-
-
-# ========== PushPlus 推送 ==========
-
-def pushplus_send(title: str, content: str):
-    token = os.environ.get("PUSHPLUS_TOKEN", "")
-    topic = os.environ.get("PUSHPLUS_TOPIC", "")
+def push(title, content):
+    token = os.getenv("PUSHPLUS_TOKEN")
+    topic = os.getenv("PUSHPLUS_TOPIC")
     if not token:
-        print("❌ PUSHPLUS_TOKEN 未配置，跳过推送")
-        return
-
-    try:
-        import requests
-        url = "http://www.pushplus.plus/send"
-        data = {
-            "token": token,
-            "title": title,
-            "content": content,
-            "template": "markdown",
-        }
-        if topic:
-            data["topic"] = topic
-        resp = requests.post(url, json=data, timeout=10)
-        result = resp.json()
-        if result.get("code") == 200:
-            print("✅ PushPlus 推送成功")
-        else:
-            print(f"⚠ PushPlus 返回: {result}")
-    except Exception as e:
-        print(f"❌ PushPlus 推送失败: {e}")
+        print("[WARN] 无TOKEN"); return
+    import requests
+    payload = {"token": token, "title": title, "content": content, "template": "markdown"}
+    if topic: payload["topic"] = topic
+    r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
+    print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
 
 
-# ========== 主逻辑 ==========
+def yi(v):
+    return v / 1e8 if v is not None else None
+
 
 def main():
-    print(f"========== 触发价监控 | {datetime.now():%Y-%m-%d %H:%M:%S} ==========\n")
+    now = datetime.now()
+    print(f"[START] 财报日历+业绩分析 {now:%Y-%m-%d %H:%M}")
 
-    results = {"hit": [], "close": [], "normal": 0, "failed": 0, "no_trigger": 0}
+    yjkb = fetch_yjkb("20260630")
+    yjbb = fetch_yjbb("20260630")
+    data = {}
+    for code in CODE2NAME:
+        if code in yjkb and code in yjbb:
+            yjkb[code]["gm"] = yjbb[code]["gm"]
+            data[code] = yjkb[code]
+        elif code in yjkb:
+            data[code] = yjkb[code]
+        elif code in yjbb:
+            data[code] = yjbb[code]
+    print(f"  本期 {len(data)} 只（快报{len(yjkb)}/报表{len(yjbb)}）")
 
-    for s in STOCKS:
-        code = s["code"]
-        name = s["name"]
-        trigger = s["trigger"]
+    ly = fetch_yjbb("20250630")
+    print(f"  去年同期 {len(ly)} 只")
 
-        if trigger is None:
-            results["no_trigger"] += 1
-            continue
+    for code in list(data.keys()):
+        kf, kf_g = fetch_kf(code)
+        data[code]["kf"] = kf
+        data[code]["kf_g"] = kf_g
+        print(f"  {code} 扣非: {kf} ({kf_g})")
 
-        price = get_price(code)
+    yjyg = fetch_yjyg("20260630")
+    print(f"  业绩预告 {len(yjyg)} 只")
 
-        if price is None:
-            print(f"❌ {name}({code}) 获取价格失败")
-            results["failed"] += 1
-            continue
-
-        gap_pct = (price - trigger) / trigger * 100
-
-        if price <= trigger:
-            status = "🔥 已触发"
-            results["hit"].append({**s, "price": price, "gap": gap_pct})
-        elif gap_pct <= 10:
-            status = "⏳ 即将"
-            results["close"].append({**s, "price": price, "gap": gap_pct})
+    reported, pre_pending, no_info = [], [], []
+    for code, name, attr in STOCKS:
+        if code in data:
+            reported.append((code, name, attr, data[code], ly.get(code, {})))
+        elif code in yjyg:
+            pre_pending.append((name, attr, yjyg[code]))
         else:
-            status = "   "
-            results["normal"] += 1
+            no_info.append(name)
+    reported.sort(key=lambda x: x[3].get("date", ""))
 
-        print(f"{status} | {name:6s}({code}) | 现价{price:>8.2f} | 触发{trigger:>8.2f} | 差距{gap_pct:>+5.1f}% | {s['attr']}")
+    lines = [f"## 📅 财报日历+半年报分析 — {now:%Y.%m.%d}", "",
+             f"> 已披露 {len(reported)} ｜ 有预告 {len(pre_pending)} ｜ 待披露 {len(no_info)} ｜ 8月31日前全出", ""]
 
-    print(f"\n========== 汇总 ==========")
-    print(f"🔥 已触发: {len(results['hit'])} 只")
-    print(f"⏳ 即将（≤10%）: {len(results['close'])} 只")
-    print(f"   正常: {results['normal']} 只")
-    print(f"   无触发价: {results['no_trigger']} 只")
-    print(f"   获取失败: {results['failed']} 只")
-
-    # ===== 构建推送内容 =====
-    if not results["hit"] and not results["close"]:
-        print("\n📭 无触发/即将触发股票，不推送")
-        return
-
-    lines = [
-        f"## 📊 触发价监控日报",
-        f"**{datetime.now():%Y-%m-%d %H:%M}**",
-        "",
-    ]
-
-    if results["hit"]:
-        lines.append("### 🔥 已触发（现价 ≤ 触发价）")
+    if reported:
+        lines.append("### 📊 已披露半年报｜成长")
+        lines.append("| 股票 | 营收(亿) | 营收同比 | 净利(亿) | 净利同比 | 扣非(亿) | 扣非同比 |")
+        lines.append("|------|---------|---------|---------|---------|---------|---------|")
+        for code, name, attr, y, l in reported:
+            rev = f"{yi(y['rev']):.1f}" if y["rev"] is not None else "-"
+            rev_g = f"{y['rev_g']:+.1f}%" if y["rev_g"] is not None else "-"
+            pf = f"{yi(y['profit']):.1f}" if y["profit"] is not None else "-"
+            pf_g = f"{y['profit_g']:+.1f}%" if y["profit_g"] is not None else "-"
+            kf = f"{yi(y.get('kf')):.1f}" if y.get("kf") is not None else "-"
+            kf_g = f"{y.get('kf_g'):+.1f}%" if y.get("kf_g") is not None else "-"
+            lines.append(f"| {name} | {rev} | {rev_g} | {pf} | {pf_g} | {kf} | {kf_g} |")
         lines.append("")
-        lines.append("| 股票 | 现价 | 触发价 | 差距 | 属性 |")
-        lines.append("|------|------|--------|------|------|")
-        for s in results["hit"]:
-            lines.append(f"| {s['name']}({s['code']}) | {s['price']:.2f} | {s['trigger']:.2f} | {s['gap']:+.1f}% | {s['attr']} |")
-        lines.append("")
-
-    if results["close"]:
-        lines.append("### ⏳ 即将触发（距触发 ≤10%）")
-        lines.append("")
-        lines.append("| 股票 | 现价 | 触发价 | 差距 | 属性 |")
-        lines.append("|------|------|--------|------|------|")
-        for s in results["close"]:
-            lines.append(f"| {s['name']}({s['code']}) | {s['price']:.2f} | {s['trigger']:.2f} | {s['gap']:+.1f}% | {s['attr']} |")
+        lines.append("### 📊 已披露半年报｜质量+简析")
+        lines.append("| 股票 | ROE | ROE同比 | 毛利率 | 毛利率同比 | 简析 |")
+        lines.append("|------|-----|---------|--------|-----------|------|")
+        for code, name, attr, y, l in reported:
+            roe = f"{y['roe']:.1f}%" if y["roe"] is not None else "-"
+            gm = f"{y['gm']:.1f}%" if y["gm"] is not None else "-"
+            roe_g = f"{y['roe'] - l['roe']:+.1f}pp" if (y["roe"] is not None and l.get("roe") is not None) else "-"
+            gm_g = f"{y['gm'] - l['gm']:+.1f}pp" if (y["gm"] is not None and l.get("gm") is not None) else "-"
+            a = analyze(CODE2ATTR[code], y["rev_g"], y.get("kf_g") if y.get("kf_g") is not None else y["profit_g"])
+            lines.append(f"| {name} | {roe} | {roe_g} | {gm} | {gm_g} | {a} |")
         lines.append("")
 
-    lines.append("> ⚠️ 触发 ≠ 立即买，需综合判断。参考框架交易纪律：左侧分层，目标价打9折，仓位减半，观察1周。")
+    if pre_pending:
+        lines.append("### ⏳ 已发预告（待披露）")
+        for name, attr, yg in pre_pending:
+            lines.append(f"- **{name}**[{ATTR_LABEL.get(attr,attr)}]：{yg}")
+        lines.append("")
 
-    content = "\n".join(lines)
-    pushplus_send("📊 触发价监控日报", content)
+    if no_info:
+        lines.append(f"### 📌 暂无预告（共{len(no_info)}只）")
+        lines.append(f"> {', '.join(no_info[:15])}" + (f"等共{len(no_info)}只" if len(no_info) > 15 else ""))
+        lines.append("")
+
+    push(f"📅 财报日历+业绩分析 {now:%Y.%m.%d}", "\n".join(lines))
+    print(f"[DONE] 已披露 {len(reported)} 预告 {len(pre_pending)} 待披露 {len(no_info)}")
 
 
 if __name__ == "__main__":
