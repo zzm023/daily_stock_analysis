@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""大股东增减持+质押+解禁周报（调试版）
+"""大股东增减持+质押+解禁周报：东财公告 + PDF正文解析
 """
 import requests
 import re
@@ -37,6 +37,21 @@ def fetch_announcements(codes_str):
     return r.json()
 
 
+def get_pdf_url(art_code):
+    """正文API返回PDF链接"""
+    try:
+        r = requests.get(CONTENT_URL, params={"art_code": art_code, "client_source": "web", "page_index": 1},
+                         headers=HEADERS, timeout=15)
+        data = (r.json().get("data") or {})
+        for key in ("attach_list", "attach_list_ch"):
+            lst = data.get(key) or []
+            if lst and lst[0].get("attach_url"):
+                return lst[0]["attach_url"]
+    except Exception as e:
+        print(f"  获取PDF地址失败 {art_code}: {e}")
+    return ""
+
+
 def parse_pdf(url):
     if not url.startswith("http"):
         url = "https://static.cninfo.com.cn/" + url
@@ -54,24 +69,12 @@ def parse_pdf(url):
         return ""
 
 
-def fetch_content(art_code, adjunct_url=""):
-    text = ""
-    if art_code:
-        try:
-            r = requests.get(CONTENT_URL, params={"art_code": art_code, "client_source": "web", "page_index": 1},
-                             headers=HEADERS, timeout=15)
-            j = r.json()
-            print(f"  [DEBUG] 正文API响应: {str(j)[:300]}")
-            html = (j.get("data") or {}).get("content") or ""
-            if html:
-                text = re.sub(r"<[^>]+>", " ", html)
-                text = re.sub(r"\s+", " ", text)
-        except Exception as e:
-            print(f"  [DEBUG] 正文API异常: {e}")
-    if not text and adjunct_url:
-        print(f"  [DEBUG] 尝试PDF: {adjunct_url}")
-        text = parse_pdf(adjunct_url)
-    return text
+def fetch_content(art_code):
+    """拿PDF地址→下载→解析文字"""
+    url = get_pdf_url(art_code) if art_code else ""
+    if url:
+        return parse_pdf(url)
+    return ""
 
 
 def extract_summary(text):
@@ -155,7 +158,6 @@ def main():
 
     hits = []
     codes = [c for c, _ in STOCKS]
-    debugged = False
     for i in range(0, len(codes), 50):
         batch = ",".join(codes[i:i+50])
         for attempt in range(3):
@@ -164,21 +166,16 @@ def main():
                 lst = (j.get("data") or {}).get("list") or []
                 print(f"  批次{i//50+1}: {len(lst)}条")
                 for a in lst:
-                    if not debugged:
-                        print(f"  [DEBUG] keys: {list(a.keys())}")
-                        print(f"  [DEBUG] 首条原文: {str(a)[:400]}")
-                        debugged = True
                     date = (a.get("notice_date") or "")[:10]
                     title = a.get("title", "")
                     if date >= since and any(k in title for k in KEYWORDS):
-                        name = a.get("sec_name") or a.get("secu_name") or ""
-                        code = a.get("sec_code") or a.get("secu_code") or ""
+                        cds = (a.get("codes") or [{}])[0]
+                        name = cds.get("short_name", "")
+                        code = cds.get("stock_code", "")
                         if not name and ":" in title:
                             name = title.split(":")[0]
                         hits.append({"name": name, "code": code, "date": date,
-                                     "title": title,
-                                     "art_code": a.get("art_code", ""),
-                                     "adj_url": a.get("adjunctUrl", "") or a.get("adjunct_url", "")})
+                                     "title": title, "art_code": a.get("art_code", "")})
                 break
             except Exception as e:
                 if attempt < 2:
@@ -186,9 +183,9 @@ def main():
                 else:
                     print(f"  批次{i//50+1} 最终失败: {e}")
 
-    print(f"  命中 {len(hits)} 条，拉正文...")
+    print(f"  命中 {len(hits)} 条，解析PDF...")
     for h in hits:
-        text = fetch_content(h.get("art_code", ""), h.get("adj_url", ""))
+        text = fetch_content(h.get("art_code", ""))
         h["summary"] = extract_summary(text)
         print(f"  🔥 {h['name']} {h['date']} → {h['summary']}")
         time.sleep(0.3)
