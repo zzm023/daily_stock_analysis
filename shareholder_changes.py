@@ -166,6 +166,10 @@ def main():
                 for a in lst:
                     date = (a.get("notice_date") or "")[:10]
                     title = a.get("title", "")
+                    if date >= since and len([x for x in STOCKS if x[0] in (a.get("sec_code") or a.get("secu_code") or "")]):
+                        print(f"  [DEBUG] 字段keys: {list(a.keys())}")
+                        print(f"  [DEBUG] art_code={a.get('art_code')!r} adjunctUrl={a.get('adjunctUrl')!r} adjunct_url={a.get('adjunct_url')!r}")
+                        print(f"  [DEBUG] 原文前300字: {str(a)[:300]}")
                     if date >= since and any(k in title for k in KEYWORDS):
                         name = a.get("sec_name") or a.get("secu_name") or ""
                         code = a.get("sec_code") or a.get("secu_code") or ""
