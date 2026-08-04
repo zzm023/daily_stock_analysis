@@ -76,7 +76,17 @@ def fetch_all_stocks():
         url = "http://qt.gtimg.cn/q=" + ",".join(batch)
         for attempt in range(3):
             try:
-                resp = requests.get(url, timeout=15)
+               resp = None
+            for retry in range(3):
+                try:
+                    resp = requests.get(url, headers=headers, timeout=15)
+                    break
+                except Exception:
+                    if retry < 2:
+                        import time; time.sleep(3 * (retry + 1))
+            if resp is None:
+                print(f"  批次{i//batch_size+1} 失败: 3次重试均超时")
+                continue
                 resp.encoding = "gbk"
                 for line in resp.text.strip().split("\n"):
                     m = re.search(r'v_(\w+)="(.+)"', line)
