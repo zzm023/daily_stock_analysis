@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """财报日历 + 半年报财务数据提取分析
-数据源：akshare（东财业绩报表+新浪扣非）｜ 每周一 08:30
+数据源：akshare（快报+报表+新浪扣非）｜ 每周一 08:30
 """
 import akshare as ak
 import os
@@ -36,18 +36,61 @@ def to_float(v):
         return None
 
 
+def to_date(v):
+    """兼容各种日期格式"""
+    if v is None:
+        return None
+    if hasattr(v, "date"):
+        return v.date()
+    s = str(v).strip()[:10]
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def fetch_schedule():
     try:
         df = ak.stock_report_disclosure()
         if df is not None and not df.empty:
+            print(f"  [DEBUG] 日程列: {list(df.columns)}")
+            print(f"  [DEBUG] 前3行: {df.head(3).to_string()}")
             return df
     except Exception as e:
         print(f"  披露日程失败: {e}")
     return None
 
 
+def fetch_yjkb(report_date):
+    """业绩快报（本版列名：营业收入-营业收入/公告日期）"""
+    try:
+        df = ak.stock_yjkb_em(date=report_date)
+        if df is None or df.empty:
+            return {}
+        out = {}
+        for _, r in df.iterrows():
+            code = str(r.get("股票代码", "")).zfill(6)
+            if code not in CODE2NAME:
+                continue
+            out[code] = {
+                "rev": to_float(r.get("营业收入-营业收入")),
+                "rev_g": to_float(r.get("营业收入-同比增长")),
+                "profit": to_float(r.get("净利润-净利润")),
+                "profit_g": to_float(r.get("净利润-同比增长")),
+                "roe": to_float(r.get("净资产收益率")),
+                "gm": None,
+                "date": str(r.get("公告日期", ""))[:10],
+            }
+        return out
+    except Exception as e:
+        print(f"  业绩快报失败: {e}")
+        return {}
+
+
 def fetch_yjbb(report_date):
-    """东财业绩报表（akshare，已验证可用）"""
+    """业绩报表（列名：营业总收入-营业总收入/最新公告日期）"""
     try:
         df = ak.stock_yjbb_em(date=report_date)
         if df is None or df.empty:
@@ -89,7 +132,7 @@ def fetch_yjyg(report_date):
 
 
 def fetch_kf(code):
-    """新浪财务摘要：扣非净利润（本期+去年同期，算同比）"""
+    """新浪财务摘要：扣非（本期+去年同期算同比）"""
     try:
         df = ak.stock_financial_abstract(symbol=code)
         if df is None or df.empty:
@@ -103,11 +146,10 @@ def fetch_kf(code):
         cur = to_float(row.iloc[0].get(cur_col)) if cur_col else None
         ly = to_float(row.iloc[0].get(ly_col)) if ly_col else None
         if cur is not None and ly not in (None, 0):
-            g = (cur - ly) / abs(ly) * 100
-            return cur, g
+            return cur, (cur - ly) / abs(ly) * 100
         return cur, None
     except Exception as e:
-        print(f"  {code} 扣非获取失败: {e}")
+        print(f"  {code} 扣非失败: {e}")
         return None, None
 
 
@@ -162,38 +204,51 @@ def main():
             if code not in CODE2NAME:
                 continue
             d = r.get("实际披露日期") or r.get("首次预约")
-            if d is not None and str(d).strip():
-                sched[code] = str(d)[:10]
-    print(f"  披露日程 {len(sched)}/52")
+            dd = to_date(d)
+            if dd is not None:
+                sched[code] = dd
+        print(f"  披露日程 {len(sched)}/52")
+        if sched:
+            sample = list(sched.values())[:5]
+            print(f"  [DEBUG] 日程日期样例: {sample}")
+            print(f"  [DEBUG] 未来30天内数量: {sum(1 for v in sched.values() if today <= v <= today + timedelta(days=30))}")
 
-    data = fetch_yjbb("20260630")
+    yjkb = fetch_yjkb("20260630")
+    yjbb = fetch_yjbb("20260630")
+    data = {}
+    for code in CODE2NAME:
+        if code in yjkb and code in yjbb:
+            yjkb[code]["gm"] = yjbb[code]["gm"]
+            data[code] = yjkb[code]
+        elif code in yjkb:
+            data[code] = yjkb[code]
+        elif code in yjbb:
+            data[code] = yjbb[code]
+    print(f"  本期 {len(data)} 只（快报{len(yjkb)}/报表{len(yjbb)}）")
+
     ly = fetch_yjbb("20250630")
-    print(f"  本期 {len(data)} 只 ｜ 去年同期 {len(ly)} 只")
+    print(f"  去年同期 {len(ly)} 只")
 
-    # 扣非：只对已披露的拉（新浪）
     for code in list(data.keys()):
         kf, kf_g = fetch_kf(code)
         data[code]["kf"] = kf
         data[code]["kf_g"] = kf_g
-        print(f"  {code} 扣非: {kf} ({kf_g}%)")
+        print(f"  {code} 扣非: {kf} ({kf_g})")
 
     yjyg = fetch_yjyg("20260630")
     print(f"  业绩预告 {len(yjyg)} 只")
 
     reported, upcoming = [], []
     for code, name, attr in STOCKS:
-        d = sched.get(code, "")
         if code in data:
             reported.append((code, name, attr, data[code], ly.get(code, {})))
-        elif d:
-            try:
-                dd = datetime.strptime(d, "%Y-%m-%d").date()
-                if today <= dd <= today + timedelta(days=30):
-                    upcoming.append((dd, code, name, d, yjyg.get(code, "-")))
-            except ValueError:
-                pass
+        elif code in sched:
+            dd = sched[code]
+            if today <= dd <= today + timedelta(days=30):
+                upcoming.append((dd, code, name, str(dd), yjyg.get(code, "-")))
     upcoming.sort()
     reported.sort(key=lambda x: x[3].get("date", ""))
+    print(f"  [DEBUG] 已披露{len(reported)} 未来30天{len(upcoming)}")
 
     lines = [f"## 📅 财报日历+半年报分析 — {now:%Y.%m.%d}", "",
              f"> 已披露 {len(reported)} 只 ｜ 未来30天披露 {len(upcoming)} 只", ""]
@@ -225,8 +280,10 @@ def main():
 
     if upcoming:
         lines.append("### ⏳ 未来30天披露")
-        for dd, code, name, d, yg in upcoming:
+        for dd, code, name, d, yg in upcoming[:20]:
             lines.append(f"- {dd} {name}：{yg}")
+        if len(upcoming) > 20:
+            lines.append(f"- …共{len(upcoming)}只")
         lines.append("")
 
     if not reported and not upcoming:
