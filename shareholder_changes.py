@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""大股东增减持+质押+解禁周报：标题+正文双扫（降噪版）
+"""增减持+质押+解禁监控：只扫标题关键词（砍正文PDF下载）
+每周一 08:30 CST ｜ 数据源：东财公告API
 """
 import requests
-import re
+import json
 import os
+import re
 from datetime import datetime, timedelta
 
 STOCKS = [
@@ -22,143 +24,91 @@ STOCKS = [
     ("300124","汇川技术"),("002837","英维克"),("300627","华测导航"),("002410","广联达"),
 ]
 
-KEYWORDS = ["增持", "减持", "权益变动", "质押", "解禁", "限售"]
-# 激励计划类噪音：限制性股票回购注销等，非真实增减持/解禁
-NOISE_TITLE = ["回购注销", "限制性股票激励", "股权激励计划", "激励对象",
-               "分派", "派息", "分红"]
-ANNO_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
-CONTENT_URL = "https://np-cnotice-stock.eastmoney.com/api/content/ann"
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+# 标题关键词（命中才下载PDF）
+KEYWORDS = [
+    "减持", "增持", "质押", "解禁", "解除质押", "补充质押",
+    "大宗交易", "协议转让", "权益变动", "简式权益变动",
+    "要约收购", "集中竞价", "可交债", "EB换股",
+]
+# 标题噪声（命中关键词也跳过）
+NOISE_TITLE = [
+    "激励", "授予", "回购注销", "回购实施", "关联交易",
+    "担保", "理财产品", "募集资金", "闲置资金",
+]
 
 
-def is_noise(title):
-    return any(x in title for x in NOISE_TITLE)
-
-
-def fetch_announcements(codes_str, page=1):
-    params = {
-        "sr": -1, "page_size": 50, "page_index": page, "ann_type": "A",
-        "client_source": "web", "stock_list": codes_str, "f_node": 0, "s_node": 0,
-    }
-    r = requests.get(ANNO_URL, params=params, headers=HEADERS, timeout=15)
-    return r.json()
-
-
-def get_pdf_url(art_code):
-    try:
-        r = requests.get(CONTENT_URL, params={"art_code": art_code, "client_source": "web", "page_index": 1},
-                         headers=HEADERS, timeout=15)
-        data = (r.json().get("data") or {})
-        for key in ("attach_list", "attach_list_ch"):
-            lst = data.get(key) or []
-            if lst and lst[0].get("attach_url"):
-                return lst[0]["attach_url"]
-    except Exception:
-        pass
-    return ""
-
-
-def parse_pdf(url):
-    if not url.startswith("http"):
-        url = "https://static.cninfo.com.cn/" + url
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        import io
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(r.content))
-        parts = []
-        for page in reader.pages[:4]:
-            parts.append(page.extract_text() or "")
-        return re.sub(r"\s+", " ", " ".join(parts))
-    except Exception as e:
-        print(f"  PDF解析失败: {e}")
-        return ""
+def fetch_anns(code):
+    """东财公告API：近7天"""
+    now = datetime.now()
+    start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    end = now.strftime("%Y-%m-%d")
+    all_rows = []
+    for page in range(1, 6):
+        url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+        params = {
+            "sr": "-1", "page_size": "50", "page_index": str(page),
+            "ann_type": "A", "client_source": "web",
+            "stock_list": code, "f_node": "0", "s_node": "0",
+            "begin_time": start, "end_time": end,
+        }
+        try:
+            r = requests.get(url, params=params, timeout=15)
+            d = r.json()
+            data = d.get("data", {}).get("list", []) or d.get("data", [])
+            if not data:
+                break
+            all_rows.extend(data)
+            if len(data) < 50:
+                break
+        except Exception as e:
+            print(f"  {code} 第{page}页失败: {e}")
+            break
+    return all_rows
 
 
 def fetch_text(art_code):
-    url = get_pdf_url(art_code) if art_code else ""
-    if url:
-        return parse_pdf(url)
-    return ""
+    """东财公告PDF文本"""
+    try:
+        r = requests.get(
+            f"https://np-anotice-stock.eastmoney.com/api/security/ann/detail",
+            params={"art_code": str(art_code)},
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=15
+        )
+        return r.text or ""
+    except Exception:
+        return ""
+
+
+def clean(text):
+    """清洗HTML标签"""
+    return re.sub(r'<[^>]+>', ' ', str(text).replace("&nbsp;", " "))
 
 
 def extract_summary(text, title=""):
-    """返回结构化摘要；无有效提取返回None"""
-    if not text:
+    """提取：股东/数量/比例/方式"""
+    raw = clean(text)
+    # 找数字+%（最多的两段）
+    pcts = re.findall(r'(\d+\.?\d{0,2})\s*%', raw)
+    shares = re.findall(r'([\d,]+\.?\d{0,2})\s*[万万千]?股', raw)
+    ratios = re.findall(r'(?:占|比例|减持|增持).*?(\d+\.?\d{0,2})\s*%', raw)
+    pct = pcts[0] if pcts else (ratios[0] if ratios else None)
+    share = shares[0] if shares else None
+
+    if not pct and not share:
         return None
-    noise = is_noise(title)
-    sentences = [s.strip() for s in re.split(r"[。；;]", text) if s.strip()]
-    picks = []
 
-    # 解禁类（仅认上市流通/解禁+数量，激励类公告跳过）
-    if not noise:
-        for s in sentences:
-            if "解禁" not in s and "解除限售" not in s and "限售股" not in s:
-                continue
-            if "上市流通" not in s and "解禁" not in s:
-                continue
-            m_qty = re.search(r"(\d[\d,\.]*)\s*(亿|万)?股", s)
-            m_pct = re.search(r"占(?:公司)?总股本(?:比例)?\s*(\d+(?:\.\d+)?)\s*%", s)
-            if m_qty or m_pct:
-                parts = []
-                if m_qty:
-                    parts.append(f"{m_qty.group(1)}{m_qty.group(2) or ''}股")
-                if m_pct:
-                    parts.append(f"占总股本{m_pct.group(1)}%")
-                picks.append(f"解禁{'、'.join(parts)}")
-
-    # 质押类
-    if not noise:
-        for s in sentences:
-            if "质押" not in s:
-                continue
-            if re.search(r"(前|后)持股|累计质押", s) and "本次" not in s and "解除" not in s:
-                continue
-            m_qty = re.search(r"(\d[\d,\.]*)\s*(亿|万)?股", s)
-            m_own = re.search(r"占其(?:所持|持有)?股份(?:比例)?\s*(\d+(?:\.\d+)?)\s*%", s)
-            m_total = re.search(r"占(?:公司)?总股本(?:比例)?\s*(\d+(?:\.\d+)?)\s*%", s)
-            if m_qty or m_own or m_total:
-                parts = []
-                kind = "解除质押" if "解除质押" in s else "质押"
-                if m_qty:
-                    parts.append(f"{m_qty.group(1)}{m_qty.group(2) or ''}股")
-                if m_own:
-                    parts.append(f"占其持{m_own.group(1)}%")
-                if m_total:
-                    parts.append(f"占总股本{m_total.group(1)}%")
-                picks.append(f"{kind}{'、'.join(parts)}")
-
-    # 增减持类
-    zd = []
-    for s in sentences:
-        if ("减持" not in s and "增持" not in s) or "质押" in s:
-            continue
-        m_qty = re.search(r"(不超过\s*)?(\d[\d,\.]*)\s*(亿|万)?股", s)
-        m_pct = re.search(r"占[^%]{0,15}?(\d+(?:\.\d+)?)\s*%", s)
-        if not (m_qty or m_pct):
-            continue
-        if re.search(r"(增持|减持)(前|后)持股|变动(前|后)|期末持股", s):
-            continue
-        if re.search(r"每\s*10\s*股", s):
-            continue
-        if re.search(r"(不得|未|无|承诺)(减持|增持)", s):
-            continue
-        score = sum(1 for kw in ["本次", "拟", "计划", "累计", "已完成"] if kw in s)
-        qty = f"{m_qty.group(2)}{m_qty.group(3) or ''}股" if m_qty else ""
-        pct = f"{m_pct.group(1)}%" if m_pct else ""
-        kind = "减持" if "减持" in s else "增持"
-        zd.append((score, f"{kind}{qty}{('/' + pct) if pct else ''}"))
-    zd.sort(key=lambda x: -x[0])
-    picks.extend(p for _, p in zd[:3])
-
-    if picks:
-        seen, out = set(), []
-        for p in picks:
-            if p not in seen:
-                seen.add(p); out.append(p)
-        s = "；".join(out[:3])
-        return s[:150]  # 防截断
-    return None
+    parts = []
+    if share:
+        parts.append(f"{share}股")
+    if pct:
+        parts.append(f"{pct}%")
+    # 判断类型
+    t = "减持" if any(k in raw for k in ["减持","拟减持","减持计划"]) else ""
+    t = "增持" if any(k in raw for k in ["增持","拟增持","增持计划"]) else t
+    t = "质押" if any(k in raw for k in ["质押","补充质押"]) else t
+    t = "解禁" if any(k in raw for k in ["解禁","上市流通"]) else t
+    t = t or "权益变动"
+    return f"{t} {'/'.join(parts)}"
 
 
 def push(title, content):
@@ -167,87 +117,61 @@ def push(title, content):
     if not token:
         print("[WARN] 无TOKEN"); return
     payload = {"token": token, "title": title, "content": content, "template": "markdown"}
-    if topic: payload["topic"] = topic
+    if topic:
+        payload["topic"] = topic
     r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
     print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
 
 
 def main():
-    import time
     now = datetime.now()
-    since = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-    print(f"[START] 标题+正文扫描(降噪) {now:%Y-%m-%d %H:%M}")
-
-    anns = []
-    codes = [c for c, _ in STOCKS]
-    for i in range(0, len(codes), 50):
-        batch = ",".join(codes[i:i+50])
-        for page in (1, 2):
-            for attempt in range(3):
-                try:
-                    j = fetch_announcements(batch, page)
-                    lst = (j.get("data") or {}).get("list") or []
-                    new = [a for a in lst if (a.get("notice_date") or "")[:10] >= since]
-                    anns.extend(new)
-                    print(f"  批次{i//50+1} 第{page}页: 窗口内 {len(new)}条")
-                    if len(lst) < 50 or not new:
-                        break
-                    break
-                except Exception as e:
-                    if attempt < 2:
-                        print(f"  重试..."); time.sleep(4*(attempt+1))
-                    else:
-                        print(f"  失败: {e}")
-        time.sleep(0.3)
-
-    seen, anns2 = set(), []
-    for a in anns:
-        if a.get("art_code") not in seen:
-            seen.add(a.get("art_code")); anns2.append(a)
-    print(f"  7天内公告共 {len(anns2)} 条")
+    print(f"[START] 增减持监控 {now:%Y-%m-%d %H:%M}")
 
     hits = []
-    for idx, a in enumerate(anns2):
-        date = (a.get("notice_date") or "")[:10]
-        title = a.get("title", "")
-        if is_noise(title):
-            continue  # 激励类噪音直接跳过
-        cds = (a.get("codes") or [{}])[0]
-        name = cds.get("short_name", "") or (title.split(":")[0] if ":" in title else "")
-        code = cds.get("stock_code", "")
-        art_code = a.get("art_code", "")
-        title_hit = any(k in title for k in KEYWORDS)
+    for code, name in STOCKS:
+        anns = fetch_anns(code)
+        if not anns:
+            continue
+        for a in anns:
+            title = str(a.get("notice_title", ""))
+            title_upper = title.upper()
+            # 噪声跳过
+            if any(k in title_upper for k in ("激励".upper(), "授予".upper(), "回购注销".upper(),
+                                               "回购实施".upper(), "理财产品".upper(), "闲置资金".upper())):
+                continue
+            # 关键词匹配
+            if not any(k in title for k in KEYWORDS):
+                continue
+            art_code = a.get("art_code", "")
+            notice_date = str(a.get("notice_date", ""))[:10]
+            text = fetch_text(art_code)
+            if not text:
+                continue
+            summary = extract_summary(text, title)
+            if summary:
+                print(f"  🔥 {name} {notice_date} → {summary}")
+                hits.append({"name": name, "code": code, "date": notice_date,
+                             "title": title, "summary": summary})
+        if anns:
+            print(f"  {name}: {len(anns)}条 / {len(hits)}命中")
 
-        text = fetch_text(art_code)
-        summary = extract_summary(text, title)
-        if title_hit and summary:
-            print(f"  [标题] {name} {date} → {summary}")
-            hits.append({"name": name, "code": code, "date": date,
-                         "title": title, "summary": summary, "tag": "标题"})
-        elif not title_hit and summary and text and any(k in text for k in KEYWORDS):
-            # 正文扫描：只认结构化提取，碎片不要
-            print(f"  [正文] {name} {date} → {summary}")
-            hits.append({"name": name, "code": code, "date": date,
-                         "title": title, "summary": summary, "tag": "正文"})
-        if (idx + 1) % 20 == 0:
-            print(f"  进度 {idx+1}/{len(anns2)}")
-        time.sleep(0.2)
+    if not hits:
+        print("[INFO] 近7天无相关公告")
+        push(f"📢 增减持 {now:%Y.%m.%d}", "近7天无增减持/质押/解禁相关公告。")
+        return
 
+    hits.sort(key=lambda x: x["date"], reverse=True)
     lines = [f"## 📢 增减持+质押+解禁 — {now:%Y.%m.%d}", "",
-             f"> 近7天｜ 双扫 ｜ 命中 {len(hits)} 条", ""]
-    if hits:
-        for h in hits[:15]:
-            lines.append(f"### {h['name']}({h['code']}) ｜ {h['date']} ｜ [{h['tag']}]")
-            lines.append(f"- 标题：{h['title'][:60]}")
-            lines.append(f"- 摘要：{h['summary']}")
-            lines.append("")
-        if len(hits) > 15:
-            lines.append(f"> …共{len(hits)}条，仅显示前15条")
-    else:
-        lines.append("本周无相关公告 ✅")
+             f"> 近7天 ｜ 标题关键词命中 ｜ {now:%m-%d %H:%M}", f"> 共{len(hits)}条", ""]
 
-    push(f"📢 增减持+质押+解禁周报 {now:%Y.%m.%d}", "\n".join(lines))
-    print(f"[DONE] 命中 {len(hits)} 条")
+    for h in hits:
+        lines.append(f"### {h['name']}({h['code']}) ｜ {h['date']}")
+        lines.append(f"**{h['title']}**")
+        lines.append(f"> {h['summary']}")
+        lines.append("")
+
+    push(f"📢 增减持 {now:%Y.%m.%d}（{len(hits)}条）", "\n".join(lines))
+    print(f"[DONE] {len(hits)}条命中")
 
 
 if __name__ == "__main__":
