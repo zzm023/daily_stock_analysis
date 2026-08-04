@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
+"""
+每周复盘：52只框架股票 PE / PB / 距触发价 汇总
+数据源：新浪财经 — 每周六 18:00
+"""
 import requests
 import re
 import os
+import time
 from datetime import datetime
 
 STOCKS = [
@@ -59,84 +64,126 @@ STOCKS = [
     {"code": "002410", "name": "广联达",    "trigger": 8.50,  "attr": "科技观察"},
 ]
 
-ATTR_ORDER={"①永续债":0,"①永续债候补":1,"①永续债观察":2,"②高息成长":3,"③周期拐点":4,"③周期拐点候补":5,"③周期观察":6,"④全球寡头":7,"④全球寡头候补":8,"⑤品牌心智":9,"⑤品牌心智候补":10,"⑥小众冠军":11,"⑥小众冠军候补":12,"科技✅⚠":13,"科技观察":14}
-ATTR_LABEL={"①永续债":"🏰 ①永续债","①永续债候补":"🏰 ①候补","①永续债观察":"🏰 ①观察","②高息成长":"💵 ②高息成长","③周期拐点":"🔄 ③周期拐点","③周期拐点候补":"🔄 ③候补","③周期观察":"🔄 ③观察","④全球寡头":"🌍 ④全球寡头","④全球寡头候补":"🌍 ④候补","⑤品牌心智":"🧠 ⑤品牌心智","⑤品牌心智候补":"🧠 ⑤候补","⑥小众冠军":"🏆 ⑥小众冠军","⑥小众冠军候补":"🏆 ⑥候补","科技✅⚠":"⚡ 科技✅⚠","科技观察":"⚡ 科技观察"}
+ATTR_ORDER = {
+    "①永续债":0,"①永续债候补":1,"①永续债观察":2,
+    "②高息成长":3,
+    "③周期拐点":4,"③周期拐点候补":5,"③周期观察":6,
+    "④全球寡头":7,"④全球寡头候补":8,
+    "⑤品牌心智":9,"⑤品牌心智候补":10,
+    "⑥小众冠军":11,"⑥小众冠军候补":12,
+    "科技✅⚠":13,"科技观察":14,
+}
+ATTR_LABEL = {
+    "①永续债":"🏰 ①永续债","①永续债候补":"🏰 ①候补","①永续债观察":"🏰 ①观察",
+    "②高息成长":"💵 ②高息成长",
+    "③周期拐点":"🔄 ③周期拐点","③周期拐点候补":"🔄 ③候补","③周期观察":"🔄 ③观察",
+    "④全球寡头":"🌍 ④全球寡头","④全球寡头候补":"🌍 ④候补",
+    "⑤品牌心智":"🧠 ⑤品牌心智","⑤品牌心智候补":"🧠 ⑤候补",
+    "⑥小众冠军":"🏆 ⑥小众冠军","⑥小众冠军候补":"🏆 ⑥候补",
+    "科技✅⚠":"⚡ 科技✅⚠","科技观察":"⚡ 科技观察",
+}
 
 
 def fetch_all_stocks():
-    import time
     codes = list(set(s["code"] for s in STOCKS))
     symbols = []
     for code in codes:
         prefix = "sh" if code.startswith("6") else "sz"
         symbols.append(f"{prefix}{code}")
+
     lookup = {}
-    for i in range(0, len(symbols), 50):
-        batch = symbols[i:i+50]
-        url = "http://qt.gtimg.cn/q=" + ",".join(batch)
-        for attempt in range(3):
+    batch_size = 25
+    headers = {"Referer": "https://finance.sina.com.cn"}
+
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i:i+batch_size]
+        url = "https://hq.sinajs.cn/list=" + ",".join(batch)
+        resp = None
+        for retry in range(3):
             try:
-               resp = None
-            for retry in range(3):
-                try:
-                    resp = requests.get(url, headers=headers, timeout=15)
-                    break
-                except Exception:
-                    if retry < 2:
-                        import time; time.sleep(3 * (retry + 1))
-            if resp is None:
-                print(f"  批次{i//batch_size+1} 失败: 3次重试均超时")
-                continue
-                resp.encoding = "gbk"
-                for line in resp.text.strip().split("\n"):
-                    m = re.search(r'v_(\w+)="(.+)"', line)
-                    if not m: continue
-                    fields = m.group(2).split("~")
-                    code = m.group(1)[2:]
-                    try:
-                        price = float(fields[3]) if fields[3] else 0
-                        pe = float(fields[39]) if len(fields)>39 and fields[39] else 0
-                        pb = float(fields[46]) if len(fields)>46 and fields[46] else 0
-                        lookup[code] = {"最新价": price, "市盈率-动态": pe, "市净率": pb}
-                    except: pass
-                print(f"  批次{i//50+1}: {sum(1 for s in batch if s[2:] in lookup)}/{len(batch)}")
+                resp = requests.get(url, headers=headers, timeout=15)
                 break
-            except Exception as e:
-                if attempt < 2: time.sleep(10*(attempt+1))
-                else: print(f"  失败: {e}")
-    print(f"  共 {len(lookup)}/52 只")
+            except Exception:
+                if retry < 2:
+                    time.sleep(3 * (retry + 1))
+        if resp is None:
+            print(f"  批次{i//batch_size+1} 失败: 3次重试均超时")
+            continue
+
+        try:
+            resp.encoding = "gbk"
+            for line in resp.text.strip().split("\n"):
+                m = re.search(r'hq_str_(\w+)="(.+)"', line)
+                if not m:
+                    continue
+                sym = m.group(1)
+                fields = m.group(2).split(",")
+                code = sym[2:]
+                try:
+                    price = float(fields[3]) if fields[3] else 0
+                    pe = float(fields[39]) if len(fields)>39 and fields[39] else 0
+                    pb = float(fields[42]) if len(fields)>42 and fields[42] else 0
+                    lookup[code] = {"最新价": price, "市盈率-动态": pe, "市净率": pb}
+                except (ValueError, IndexError):
+                    pass
+            count = sum(1 for s in batch if s[2:] in lookup)
+            print(f"  批次{i//batch_size+1}: {count}/{len(batch)}")
+        except Exception as e:
+            print(f"  批次{i//batch_size+1} 异常: {e}")
+
+    print(f"  总计获取 {len(lookup)}/52 只")
     return lookup
 
 
 def build_report(data):
     now = datetime.now()
-    lines = [f"## 📊 每周复盘 — {now.strftime('%Y.%m.%d')}", "", f"> PE / PB / 距触发价 ｜ {now.strftime('%m-%d %H:%M')}", ""]
+    lines = [
+        f"## 📊 每周复盘 — {now.strftime('%Y.%m.%d')}",
+        "",
+        f"> PE / PB / 距触发价 ｜ {now.strftime('%m-%d %H:%M')}",
+        "",
+    ]
     stocks = sorted(STOCKS, key=lambda s: (ATTR_ORDER.get(s["attr"],99), s["code"]))
-    cur, total, hit, close = None, 0, 0, 0
+    cur, total, hit, close_10 = None, 0, 0, 0
+
     for s in stocks:
         g = ATTR_LABEL.get(s["attr"], s["attr"])
         if g != cur:
             cur = g
-            lines += [f"### {g}", "", "| 股票 | 现价 | PE | PB | 触发价 | 差距% |", "|------|------|-----|-----|--------|-------|"]
-        row = data.get(s["code"], {})
+            lines.append(f"### {g}")
+            lines.append("")
+            lines.append("| 股票 | 现价 | PE | PB | 触发价 | 差距% |")
+            lines.append("|------|------|-----|-----|--------|-------|")
+
+        code = s["code"]
+        row = data.get(code, {})
         price = row.get("最新价", 0) if row else 0
         pe = row.get("市盈率-动态", 0) if row else 0
         pb = row.get("市净率", 0) if row else 0
+
         ps = f"{price:.2f}" if price else "-"
         pes = f"{pe:.1f}" if pe else "-"
         pbs = f"{pb:.2f}" if pb else "-"
         trigger = s["trigger"]
         anchor = s.get("anchor", "")
+
         if trigger and price:
             gap = (price - trigger) / trigger * 100
-            if gap <= 0: gs = f"🔴 {gap:+.1f}%"; hit += 1
-            elif gap < 10: gs = f"🟡 {gap:+.1f}%"; close += 1
-            else: gs = f"⚪ {gap:+.1f}%"
+            if gap <= 0:
+                gs = f"🔴 {gap:+.1f}%"; hit += 1
+            elif gap < 10:
+                gs = f"🟡 {gap:+.1f}%"; close_10 += 1
+            else:
+                gs = f"⚪ {gap:+.1f}%"
             ts = f"{trigger:.2f}"
-        else: gs = "-"; ts = anchor if anchor else "-"
+        else:
+            gs = "-"
+            ts = anchor if anchor else "-"
+
         lines.append(f"| {s['name']} | {ps} | {pes} | {pbs} | {ts} | {gs} |")
         total += 1
-    lines.insert(4, f"> 🔴已触发:{hit} | 🟡近10%内:{close} | ⚪安全区:{total-hit-close}")
+
+    lines.insert(4, f"> 🔴已触发:{hit} | 🟡近触发(10%):{close_10} | ⚪安全区:{total-hit-close_10}")
     lines.insert(5, "")
     return "\n".join(lines)
 
@@ -144,18 +191,25 @@ def build_report(data):
 def push(title, content):
     token = os.getenv("PUSHPLUS_TOKEN")
     topic = os.getenv("PUSHPLUS_TOPIC")
-    if not token: return
+    if not token:
+        print("[WARN] 无PUSHPLUS_TOKEN，仅打印")
+        print(content)
+        return
     payload = {"token": token, "title": title, "content": content, "template": "markdown"}
-    if topic: payload["topic"] = topic
+    if topic:
+        payload["topic"] = topic
     r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
-    print(f"[OK]" if r.json().get("code")==200 else f"[FAIL]")
+    d = r.json()
+    print(f"[{'OK' if d.get('code')==200 else 'FAIL'}] PushPlus: {d}")
 
 
 def main():
+    print(f"[START] {datetime.now()}")
     data = fetch_all_stocks()
     report = build_report(data)
     push(f"📊 每周复盘 {datetime.now().strftime('%Y.%m.%d')}", report)
     print("[DONE]")
+
 
 if __name__ == "__main__":
     main()
