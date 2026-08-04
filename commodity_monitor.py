@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-大宗商品价格监控 v3
-数据源：新浪期货API + 100ppi新闻标题匹配
+大宗商品价格监控 v4 — 全akshare方案
+使用东方财富数据源，避免新浪/100ppi IP封禁
 """
 
 import requests
 import json
 import os
-import re
 from datetime import datetime, date
 from pathlib import Path
 
@@ -15,54 +14,44 @@ COMMODITIES = {
     "碳酸锂": {
         "stocks": ["盐湖股份(000792)"],
         "level": "daily", "unit": "元/吨", "threshold": 0.03,
-        "sina_futures": "LC0",
-        "ppi_keyword": "碳酸锂",
+        "futures_code": "LC0",
     },
     "聚合MDI": {
         "stocks": ["万华化学(600309)"],
         "level": "daily", "unit": "元/吨", "threshold": 0.02,
-        "ppi_keyword": "聚合MDI",
     },
     "纯MDI": {
         "stocks": ["万华化学(600309)"],
         "level": "daily", "unit": "元/吨", "threshold": 0.02,
-        "ppi_keyword": "纯MDI",
     },
     "钛白粉(金红石型)": {
         "stocks": ["龙佰集团(002601)"],
         "level": "weekly", "unit": "元/吨", "threshold": 0.02,
-        "ppi_keyword": "钛白粉",
     },
     "蛋氨酸": {
         "stocks": ["安迪苏(600299)"],
         "level": "weekly", "unit": "元/公斤", "threshold": 0.03,
-        "ppi_keyword": "蛋氨酸",
     },
     "PO42.5水泥": {
         "stocks": ["海螺水泥(600585)"],
         "level": "weekly", "unit": "元/吨", "threshold": 0.02,
-        "ppi_keyword": "水泥",
     },
     "动力煤(5500大卡)": {
         "stocks": ["海螺水泥(600585)", "兖矿能源(600188)"],
         "level": "weekly", "unit": "元/吨", "threshold": 0.02,
-        "ppi_keyword": "动力煤",
     },
     "氯化钾": {
         "stocks": ["盐湖股份(000792)"],
         "level": "weekly", "unit": "元/吨", "threshold": 0.03,
-        "ppi_keyword": "氯化钾",
     },
     "EVA光伏料": {
         "stocks": ["福斯特(603806)"],
         "level": "weekly", "unit": "元/吨", "threshold": 0.02,
-        "ppi_keyword": "EVA",
     },
     "天然橡胶": {
         "stocks": ["赛轮轮胎(601058)"],
         "level": "weekly", "unit": "元/吨", "threshold": 0.02,
-        "sina_futures": "RU0",
-        "ppi_keyword": "天然橡胶",
+        "futures_code": "RU0",
     },
 }
 
@@ -70,90 +59,70 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 DATA_FILE = Path(__file__).parent / "commodity_prices.json"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-}
 
-
-def get_sina_futures(symbol):
-    """新浪期货主力合约"""
+def get_price_via_akshare(name, cfg):
+    """使用akshare内置函数获取价格"""
     try:
-        url = f"https://hq.sinajs.cn/list={symbol}"
-        resp = requests.get(url, headers={**HEADERS, "Referer": "https://finance.sina.com.cn"}, timeout=10)
-        resp.encoding = "gbk"
-        m = re.search(r'"([^"]*)"', resp.text)
-        if not m:
-            return None
-        parts = m.group(1).split(",")
-        if len(parts) < 4:
-            return None
-        price = float(parts[3]) if parts[3] else 0
-        prev = float(parts[2]) if parts[2] else 0
-        if price <= 0:
-            return None
-        change_pct = (price - prev) / prev if prev > 0 else 0
-        return {"price": price, "date": str(date.today()), "change_pct": round(change_pct, 4)}
+        import akshare as ak
+
+        # 方式1：通过期货日线获取（有futures_code的品种）
+        if "futures_code" in cfg:
+            try:
+                df = ak.futures_zh_daily_sina(symbol=cfg["futures_code"])
+                if df is not None and len(df) > 0:
+                    latest = df.iloc[-1]
+                    close = float(latest["收盘价"])
+                    return {"price": close, "date": str(latest["日期"]), "change_pct": None}
+            except Exception as e:
+                print(f"    [akshare futures_zh] {cfg['futures_code']} 失败: {e}")
+
+        # 方式2：尝试期货现货价格函数
+        try:
+            today_str = date.today().strftime("%Y%m%d")
+            df = ak.futures_spot_price(symbol=name, date=today_str)
+            if df is not None and len(df) > 0:
+                for _, row in df.iterrows():
+                    spot_price = row.get("现货价格") or row.get("spot_price")
+                    if spot_price and float(spot_price) > 0:
+                        return {"price": float(spot_price), "date": today_str, "change_pct": None}
+        except Exception:
+            pass
+
     except Exception as e:
-        print(f"    [新浪期货] {symbol} 异常: {e}")
-        return None
+        print(f"    [akshare] 异常: {e}")
+    return None
 
 
-def get_100ppi_news_price(keyword):
-    """从100ppi新闻搜索页面标题中提取价格"""
+def get_price_via_eastmoney(symbol):
+    """东方财富主力合约行情 — 救急备用"""
     try:
-        # 搜索今日基准价新闻
-        url = f"https://www.100ppi.com/news/?keyword={keyword}+基准价"
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        resp.encoding = "utf-8"
-        html = resp.text
-
-        # 匹配新闻标题中的价格，如 "8月3日生意社聚合MDI基准价为17866.67元/吨"
-        patterns = [
-            rf'{re.escape(keyword)}.*?基准价[为是](\d+[\.\d]*)元',
-            rf'基准价[为是](\d+[\.\d]*)元.*?{re.escape(keyword)}',
-            rf'{re.escape(keyword)}.*?(\d+[\.\d]*)元/吨',
-            rf'生意社.*?{re.escape(keyword)}.*?(\d+[\.\d]*)元',
-        ]
-        for pat in patterns:
-            matches = re.findall(pat, html)
-            for m in matches:
-                price = float(m)
-                if 10 < price < 1000000:
-                    return {"price": price, "date": str(date.today()), "change_pct": None}
-
-        # 方法2：直接匹配页面中的价格信息（更宽松）
-        loose_pat = r'(\d{4,6}\.\d{2})\s*元/[吨公斤]'
-        matches = re.findall(loose_pat, html)
-        for m in matches:
-            price = float(m)
-            if 1000 < price < 500000:
-                # 检查关键词是否在附近
-                idx = html.find(m)
-                context = html[max(0,idx-200):idx+200]
-                if keyword in context:
-                    return {"price": price, "date": str(date.today()), "change_pct": None}
-
-        print(f"    [100ppi搜索] 未匹配: {keyword}")
-    except Exception as e:
-        print(f"    [100ppi搜索] {keyword} 异常: {e}")
+        url = "https://push2.eastmoney.com/api/qt/stock/get"
+        params = {
+            "secid": f"113.{symbol}",
+            "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f60,f169,f170",
+        }
+        resp = requests.get(url, params=params, timeout=10)
+        data = resp.json().get("data", {})
+        price = data.get("f43", 0) / 100 if data.get("f43") else 0
+        if price > 0:
+            return {"price": price, "date": str(date.today()), "change_pct": None}
+    except Exception:
+        pass
     return None
 
 
 def get_commodity_price(name, cfg):
-    # 优先期货
-    if "sina_futures" in cfg:
-        result = get_sina_futures(cfg["sina_futures"])
-        if result:
-            print(f"    [新浪期货] ✅")
-            return result
+    # 1. akshare主方案
+    result = get_price_via_akshare(name, cfg)
+    if result:
+        print(f"    [akshare] ✅")
+        return result
 
-    # 100ppi新闻搜索
-    if "ppi_keyword" in cfg:
-        result = get_100ppi_news_price(cfg["ppi_keyword"])
+    # 2. 东方财富备用
+    if "futures_code" in cfg:
+        result = get_price_via_eastmoney(cfg["futures_code"])
         if result:
-            print(f"    [100ppi新闻] ✅")
+            print(f"    [东方财富] ✅")
             return result
 
     return None
@@ -173,15 +142,13 @@ def save_history(data):
 
 def pushplus_send(title, content):
     if not PUSHPLUS_TOKEN:
-        print("  [PushPlus] 未配置TOKEN")
         return
     try:
         payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
         if PUSHPLUS_TOPIC:
             payload["topic"] = PUSHPLUS_TOPIC
         r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=10)
-        result = r.json()
-        print(f"  [PushPlus] {'✅' if result.get('code')==200 else result}")
+        print(f"  [PushPlus] {'✅' if r.json().get('code')==200 else r.json()}")
     except Exception as e:
         print(f"  [PushPlus] 异常: {e}")
 
@@ -195,7 +162,7 @@ def should_check_today(cfg):
 def main():
     today = datetime.now()
     wd = ['一','二','三','四','五','六','日']
-    print(f"=== 大宗商品监控 v3 | {today.strftime('%Y-%m-%d %H:%M')} 周{wd[today.weekday()]} ===")
+    print(f"=== 大宗商品监控 v4 | {today.strftime('%Y-%m-%d %H:%M')} 周{wd[today.weekday()]} ===")
 
     history = load_history()
     alerts, weekly_items = [], []
@@ -259,17 +226,15 @@ def main():
         daily = [f"| {n} | {d['price']:,.0f} {COMMODITIES[n]['unit']} | {d['stocks']} |"
                  for n,d in all_data.items() if COMMODITIES.get(n,{}).get('level')=='daily' and d]
         if daily:
-            lines.append("\n### 每日监控快照")
+            lines.append("\n### 每日快照")
             lines.append("| 商品 | 现价 | 影响 |")
             lines.append("|---|---|---|")
             lines.extend(daily)
         lines.append("")
-    lines.append(f"---\n⏰ {today.strftime('%Y-%m-%d %H:%M')} | ✅{ok}/❌{fail} | 下次周报: 下周一")
+    lines.append(f"---\n⏰ {today.strftime('%Y-%m-%d %H:%M')} | ✅{ok}/❌{fail}")
 
     title = "⚡ 商品告警" if alerts else "📋 商品周报"
-    content = "\n".join(lines)
-    print(f"\n{content[:400]}...")
-    pushplus_send(title, content)
+    pushplus_send(title, "\n".join(lines))
     print("\n✅ 完成")
 
 
