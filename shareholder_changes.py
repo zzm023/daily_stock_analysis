@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""增减持+质押+解禁监控：只扫标题关键词（砍正文PDF下载）
+"""增减持+质押+解禁监控：标题命中→PDF提取→段落精准匹配
 每周一 08:30 CST ｜ 数据源：东财公告API
 """
 import requests
-import json
 import os
 import re
 from datetime import datetime, timedelta
@@ -24,16 +23,10 @@ STOCKS = [
     ("300124","汇川技术"),("002837","英维克"),("300627","华测导航"),("002410","广联达"),
 ]
 
-# 标题关键词（命中才下载PDF）
 KEYWORDS = [
     "减持", "增持", "质押", "解禁", "解除质押", "补充质押",
     "大宗交易", "协议转让", "权益变动", "简式权益变动",
     "要约收购", "集中竞价", "可交债", "EB换股",
-]
-# 标题噪声（命中关键词也跳过）
-NOISE_TITLE = [
-    "激励", "授予", "回购注销", "回购实施", "关联交易",
-    "担保", "理财产品", "募集资金", "闲置资金",
 ]
 
 
@@ -86,35 +79,36 @@ def fetch_text(art_code):
 
 
 def clean(text):
-    """清洗HTML标签"""
-    return re.sub(r'<[^>]+>', ' ', str(text).replace("&nbsp;", " "))
+    return re.sub(r'<[^>]+>', ' ', str(text).replace("&nbsp;", " ")).replace("\r", "\n")
 
 
 def extract_summary(text, title=""):
-    """提取：股东/数量/比例/方式"""
+    """只从包含关键词的段落提取，不走全文"""
     raw = clean(text)
-    # 找数字+%（最多的两段）
-    pcts = re.findall(r'(\d+\.?\d{0,2})\s*%', raw)
-    shares = re.findall(r'([\d,]+\.?\d{0,2})\s*[万万千]?股', raw)
-    ratios = re.findall(r'(?:占|比例|减持|增持).*?(\d+\.?\d{0,2})\s*%', raw)
-    pct = pcts[0] if pcts else (ratios[0] if ratios else None)
-    share = shares[0] if shares else None
+    paragraphs = [p.strip() for p in re.split(r'\n\s*\n|\n{2,}', raw) if len(p.strip()) > 20]
 
-    if not pct and not share:
-        return None
+    t = ""
+    if any(k in title for k in ["减持","拟减持","减持计划","集中竞价"]): t = "减持"
+    if any(k in title for k in ["增持","拟增持","增持计划"]): t = "增持"
+    if any(k in title for k in ["解除质押"]): t = "解除质押"
+    elif any(k in title for k in ["质押","补充质押"]): t = "质押"
+    if any(k in title for k in ["解禁","上市流通"]): t = "解禁"
 
-    parts = []
-    if share:
-        parts.append(f"{share}股")
-    if pct:
-        parts.append(f"{pct}%")
-    # 判断类型
-    t = "减持" if any(k in raw for k in ["减持","拟减持","减持计划"]) else ""
-    t = "增持" if any(k in raw for k in ["增持","拟增持","增持计划"]) else t
-    t = "质押" if any(k in raw for k in ["质押","补充质押"]) else t
-    t = "解禁" if any(k in raw for k in ["解禁","上市流通"]) else t
-    t = t or "权益变动"
-    return f"{t} {'/'.join(parts)}"
+    kw_list = [k for k in [t, "减持", "增持", "质押", "解禁", "权益变动", "转让"] if k]
+    relevant = [p for p in paragraphs if any(k in p for k in kw_list)]
+
+    for p in relevant[:5]:
+        pcts = re.findall(r'(\d+\.?\d{0,2})\s*%', p)
+        shares = re.findall(r'([\d,]+\.?\d{0,2})\s*[万万千]?股', p)
+        if pcts or shares:
+            parts = []
+            if shares:
+                parts.append(f"{shares[0].replace(',','')}股")
+            if pcts:
+                parts.append(f"{pcts[0]}%")
+            return f"{(t or '权益变动')} {'/'.join(parts)}"
+
+    return t or None
 
 
 def push(title, content):
@@ -138,12 +132,11 @@ def main():
         anns = fetch_anns(code)
         if not anns:
             continue
+        matched = 0
         for a in anns:
             title = str(a.get("notice_title", ""))
-            title_upper = title.upper()
             # 噪声跳过
-            if any(k in title_upper for k in ("激励".upper(), "授予".upper(), "回购注销".upper(),
-                                               "回购实施".upper(), "理财产品".upper(), "闲置资金".upper())):
+            if any(k in title for k in ["激励","授予","回购注销","回购实施","理财产品","闲置资金"]):
                 continue
             # 关键词匹配
             if not any(k in title for k in KEYWORDS):
@@ -158,8 +151,8 @@ def main():
                 print(f"  🔥 {name} {notice_date} → {summary}")
                 hits.append({"name": name, "code": code, "date": notice_date,
                              "title": title, "summary": summary})
-        if anns:
-            print(f"  {name}: {len(anns)}条 / {len(hits)}命中")
+                matched += 1
+        print(f"  {name}: {len(anns)}条/命中{matched}")
 
     if not hits:
         print("[INFO] 近7天无相关公告")
@@ -168,7 +161,7 @@ def main():
 
     hits.sort(key=lambda x: x["date"], reverse=True)
     lines = [f"## 📢 增减持+质押+解禁 — {now:%Y.%m.%d}", "",
-             f"> 近7天 ｜ 标题关键词命中 ｜ {now:%m-%d %H:%M}", f"> 共{len(hits)}条", ""]
+             f"> 近7天 ｜ 标题命中+段落精准提取 ｜ {now:%m-%d %H:%M}", f"> 共{len(hits)}条", ""]
 
     for h in hits:
         lines.append(f"### {h['name']}({h['code']}) ｜ {h['date']}")
