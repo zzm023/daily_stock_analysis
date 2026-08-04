@@ -87,10 +87,23 @@ def fetch_all_stocks():
                     fields = m.group(2).split("~")
                     code = m.group(1)[2:]  # sh600036 -> 600036
                     try:
-                        price = float(fields[3]) if fields[3] else 0
-                        pe = float(fields[38]) if len(fields)>38 and fields[38] else 0
-                        pb = 0  # 腾讯接口暂不提供PB
-                        lookup[code] = {"最新价": price, "市盈率-动态": pe, "市净率": pb}
+                         price = float(fields[3]) if fields[3] else 0
+                        # 调试：打印第一只股票的字段37-42
+                        if code == "600036":
+                            for j in range(30, min(50, len(fields))):
+                                print(f"    field[{j}] = {fields[j]}")
+                        # 尝试多个PE位置
+                        pe = 0
+                        for pe_idx in [39, 38, 37, 36, 33]:
+                            if len(fields) > pe_idx and fields[pe_idx]:
+                                try:
+                                    v = float(fields[pe_idx])
+                                    if 1 < v < 200:  # 合理的PE范围
+                                        pe = v
+                                        break
+                                except:
+                                    pass
+                        lookup[code] = {"最新价": price, "市盈率-动态": pe, "市净率": 0}
                     except (ValueError, IndexError):
                         pass
                 count = sum(1 for s in batch if s[2:] in lookup)
