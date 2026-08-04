@@ -47,13 +47,12 @@ def fetch_anns(code):
         try:
             r = requests.get(url, params=params, timeout=15)
             d = r.json()
-            raw = d.get("data", {})
-            if isinstance(raw, dict):
-                data = raw.get("list", [])
-            elif isinstance(raw, list):
-                data = [x for x in raw if isinstance(x, dict)]
-            else:
-                break
+            # 兼容两种返回格式
+            data = d.get("data", {})
+            if isinstance(data, dict):
+                data = data.get("list", [])
+            elif not isinstance(data, list):
+                data = []
             if not data:
                 break
             all_rows.extend(data)
@@ -63,7 +62,6 @@ def fetch_anns(code):
             print(f"  {code} 第{page}页失败: {e}")
             break
     return all_rows
-
 
 def fetch_text(art_code):
     """东财公告PDF文本"""
