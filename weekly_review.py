@@ -64,14 +64,12 @@ ATTR_LABEL={"①永续债":"🏰 ①永续债","①永续债候补":"🏰 ①候
 
 
 def fetch_all_stocks():
-    """腾讯接口：批量获取行情（含PE）"""
     import time
     codes = list(set(s["code"] for s in STOCKS))
     symbols = []
     for code in codes:
         prefix = "sh" if code.startswith("6") else "sz"
         symbols.append(f"{prefix}{code}")
-
     lookup = {}
     for i in range(0, len(symbols), 50):
         batch = symbols[i:i+50]
@@ -82,40 +80,30 @@ def fetch_all_stocks():
                 resp.encoding = "gbk"
                 for line in resp.text.strip().split("\n"):
                     m = re.search(r'v_(\w+)="(.+)"', line)
-                    if not m:
-                        continue
+                    if not m: continue
                     fields = m.group(2).split("~")
-                    code = m.group(1)[2:]  # sh600036 -> 600036
+                    code = m.group(1)[2:]
                     try:
-                         price = float(fields[3]) if fields[3] else 0
-                        # 调试：打印第一只股票的字段37-42
+                        price = float(fields[3]) if fields[3] else 0
                         if code == "600036":
-                            for j in range(30, min(50, len(fields))):
-                                print(f"    field[{j}] = {fields[j]}")
-                        # 尝试多个PE位置
+                            for j in range(30, min(55, len(fields))):
+                                print(f"    DEBUG field[{j}] = '{fields[j]}'")
                         pe = 0
                         for pe_idx in [39, 38, 37, 36, 33]:
                             if len(fields) > pe_idx and fields[pe_idx]:
                                 try:
                                     v = float(fields[pe_idx])
-                                    if 1 < v < 200:  # 合理的PE范围
-                                        pe = v
-                                        break
-                                except:
-                                    pass
+                                    if 1 < v < 200:
+                                        pe = v; break
+                                except: pass
                         lookup[code] = {"最新价": price, "市盈率-动态": pe, "市净率": 0}
-                    except (ValueError, IndexError):
-                        pass
-                count = sum(1 for s in batch if s[2:] in lookup)
-                print(f"  批次{i//50+1}: {count}/{len(batch)}")
+                    except (ValueError, IndexError): pass
+                print(f"  批次{i//50+1}: {sum(1 for s in batch if s[2:] in lookup)}/{len(batch)}")
                 break
             except Exception as e:
-                if attempt < 2:
-                    print(f"  批次{i//50+1} 失败, {10*(attempt+1)}秒后重试...")
-                    time.sleep(10*(attempt+1))
-                else:
-                    print(f"  批次{i//50+1} 最终失败: {e}")
-    print(f"  总计获取 {len(lookup)}/52 只")
+                if attempt < 2: time.sleep(10*(attempt+1))
+                else: print(f"  失败: {e}")
+    print(f"  共 {len(lookup)}/52 只")
     return lookup
 
 
@@ -142,8 +130,7 @@ def build_report(data):
             elif gap < 10: gs = f"🟡 {gap:+.1f}%"; close += 1
             else: gs = f"⚪ {gap:+.1f}%"
             ts = f"{trigger:.2f}"
-        else:
-            gs = "-"; ts = anchor if anchor else "-"
+        else: gs = "-"; ts = anchor if anchor else "-"
         lines.append(f"| {s['name']} | {ps} | {pes} | {ts} | {gs} |")
         total += 1
     lines.insert(4, f"> 🔴已触发:{hit} | 🟡近10%内:{close} | ⚪安全区:{total-hit-close}")
@@ -154,16 +141,14 @@ def build_report(data):
 def push(title, content):
     token = os.getenv("PUSHPLUS_TOKEN")
     topic = os.getenv("PUSHPLUS_TOPIC")
-    if not token:
-        print("[WARN] 无PUSHPLUS_TOKEN"); return
+    if not token: return
     payload = {"token": token, "title": title, "content": content, "template": "markdown"}
     if topic: payload["topic"] = topic
     r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
-    print(f"[OK]" if r.json().get("code")==200 else f"[FAIL] {r.json()}")
+    print(f"[OK]" if r.json().get("code")==200 else f"[FAIL]")
 
 
 def main():
-    print(f"[START] {datetime.now()}")
     data = fetch_all_stocks()
     report = build_report(data)
     push(f"📊 每周复盘 {datetime.now().strftime('%Y.%m.%d')}", report)
