@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""大股东增减持+质押周报：东财公告扫描 + 正文解析（股数/占比）
-每周一 08:00 ｜ 52只近7天公告 ｜ 关键词：增持/减持/权益变动/质押
+"""大股东增减持+质押+解禁周报：东财公告扫描 + 正文/PDF解析
+每周一 08:00 ｜ 52只近7天公告
 """
 import requests
 import re
@@ -38,26 +38,7 @@ def fetch_announcements(codes_str):
     return r.json()
 
 
-def fetch_content(art_code, adjunct_url=""):
-    """先试正文API，拿不到就下载PDF解析"""
-    text = ""
-    if art_code:
-        try:
-            r = requests.get(CONTENT_URL, params={"art_code": art_code, "client_source": "web", "page_index": 1},
-                             headers=HEADERS, timeout=15)
-            html = (r.json().get("data") or {}).get("content") or ""
-            if html:
-                text = re.sub(r"<[^>]+>", " ", html)
-                text = re.sub(r"\s+", " ", text)
-        except Exception:
-            pass
-    if not text and adjunct_url:
-        text = parse_pdf(adjunct_url)
-    return text
-
-
 def parse_pdf(url):
-    """下载PDF并提取文字"""
     if not url.startswith("http"):
         url = "https://static.cninfo.com.cn/" + url
     try:
@@ -74,14 +55,44 @@ def parse_pdf(url):
         return ""
 
 
+def fetch_content(art_code, adjunct_url=""):
+    text = ""
+    if art_code:
+        try:
+            r = requests.get(CONTENT_URL, params={"art_code": art_code, "client_source": "web", "page_index": 1},
+                             headers=HEADERS, timeout=15)
+            html = (r.json().get("data") or {}).get("content") or ""
+            if html:
+                text = re.sub(r"<[^>]+>", " ", html)
+                text = re.sub(r"\s+", " ", text)
+        except Exception:
+            pass
+    if not text and adjunct_url:
+        text = parse_pdf(adjunct_url)
+    return text
+
+
 def extract_summary(text):
-    """提取 增减持/质押 的股数+占比"""
     if not text:
         return "正文未获取"
     sentences = [s.strip() for s in re.split(r"[。；;]", text) if s.strip()]
     picks = []
 
-    # ── 质押类 ──
+    # 解禁类
+    for s in sentences:
+        if "解禁" not in s and "解除限售" not in s and "限售股" not in s:
+            continue
+        m_qty = re.search(r"(\d[\d,\.]*)\s*(亿|万)?股", s)
+        m_pct = re.search(r"占(?:公司)?总股本(?:比例)?\s*(\d+(?:\.\d+)?)\s*%", s)
+        if m_qty or m_pct:
+            parts = []
+            if m_qty:
+                parts.append(f"{m_qty.group(2) or ''}{m_qty.group(3) or ''}股")
+            if m_pct:
+                parts.append(f"占总股本{m_pct.group(1)}%")
+            picks.append(f"解禁{'、'.join(parts)}")
+
+    # 质押类
     for s in sentences:
         if "质押" not in s:
             continue
@@ -99,20 +110,7 @@ def extract_summary(text):
                 parts.append(f"占总股本{m_total.group(1)}%")
             picks.append(f"{kind}{'、'.join(parts)}")
 
-           # ── 解禁类 ──
-    for s in sentences:
-        if "解禁" not in s and "解除限售" not in s and "限售股" not in s:
-            continue
-        m_qty = re.search(r"(\d[\d,\.]*)\s*(亿|万)?股", s)
-        m_pct = re.search(r"占(?:公司)?总股本(?:比例)?\s*(\d+(?:\.\d+)?)\s*%", s)
-        if m_qty or m_pct:
-            parts = []
-            if m_qty:
-                parts.append(f"{m_qty.group(2) or ''}{m_qty.group(3) or ''}股")
-            if m_pct:
-                parts.append(f"占总股本{m_pct.group(1)}%")
-            picks.append(f"解禁{'、'.join(parts)}") 
-            # ── 增减持类 ──
+    # 增减持类
     for s in sentences:
         if ("减持" not in s and "增持" not in s) or "质押" in s:
             continue
@@ -127,14 +125,12 @@ def extract_summary(text):
             picks.append(f"{kind}{qty}{('/' + pct) if pct else ''}")
 
     if picks:
-        # 去重保序
         seen, out = set(), []
         for p in picks:
             if p not in seen:
                 seen.add(p); out.append(p)
         return "；".join(out[:4])
 
-    # 兜底：返回第一句含关键词的片段
     for s in sentences:
         if any(k in s for k in KEYWORDS):
             return s[:60] + ("…" if len(s) > 60 else "")
@@ -156,7 +152,7 @@ def main():
     import time
     now = datetime.now()
     since = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-    print(f"[START] 增减持+质押扫描 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 增减持+质押+解禁扫描 {now:%Y-%m-%d %H:%M}")
 
     hits = []
     codes = [c for c, _ in STOCKS]
@@ -176,7 +172,8 @@ def main():
                         if not name and ":" in title:
                             name = title.split(":")[0]
                         hits.append({"name": name, "code": code, "date": date,
-                                     "title": title, "art_code": a.get("art_code", ""),
+                                     "title": title,
+                                     "art_code": a.get("art_code", ""),
                                      "adj_url": a.get("adjunctUrl", "")})
                 break
             except Exception as e:
@@ -187,12 +184,12 @@ def main():
 
     print(f"  命中 {len(hits)} 条，拉正文...")
     for h in hits:
-                    text = fetch_content(h.get("art_code", ""), h.get("adj_url", ""))
+        text = fetch_content(h.get("art_code", ""), h.get("adj_url", ""))
         h["summary"] = extract_summary(text)
         print(f"  🔥 {h['name']} {h['date']} → {h['summary']}")
         time.sleep(0.3)
 
-    lines = [f"## 📢 增减持+质押 — {now:%Y.%m.%d}", "",
+    lines = [f"## 📢 增减持+质押+解禁 — {now:%Y.%m.%d}", "",
              f"> 近7天公告（东财）｜ 52只 ｜ 命中 {len(hits)} 条", ""]
     if hits:
         for h in hits:
@@ -203,7 +200,7 @@ def main():
     else:
         lines.append("本周无相关公告 ✅")
 
-    push(f"📢 增减持+质押周报 {now:%Y.%m.%d}", "\n".join(lines))
+    push(f"📢 增减持+质押+解禁周报 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"[DONE] {len(hits)} 条")
 
 
