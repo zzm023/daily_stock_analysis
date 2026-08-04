@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""大股东增减持+质押+解禁周报：东财公告扫描 + 正文/PDF解析
-每周一 08:00 ｜ 52只近7天公告
+"""大股东增减持+质押+解禁周报（调试版）
 """
 import requests
 import re
@@ -61,13 +60,16 @@ def fetch_content(art_code, adjunct_url=""):
         try:
             r = requests.get(CONTENT_URL, params={"art_code": art_code, "client_source": "web", "page_index": 1},
                              headers=HEADERS, timeout=15)
-            html = (r.json().get("data") or {}).get("content") or ""
+            j = r.json()
+            print(f"  [DEBUG] 正文API响应: {str(j)[:300]}")
+            html = (j.get("data") or {}).get("content") or ""
             if html:
                 text = re.sub(r"<[^>]+>", " ", html)
                 text = re.sub(r"\s+", " ", text)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [DEBUG] 正文API异常: {e}")
     if not text and adjunct_url:
+        print(f"  [DEBUG] 尝试PDF: {adjunct_url}")
         text = parse_pdf(adjunct_url)
     return text
 
@@ -78,7 +80,6 @@ def extract_summary(text):
     sentences = [s.strip() for s in re.split(r"[。；;]", text) if s.strip()]
     picks = []
 
-    # 解禁类
     for s in sentences:
         if "解禁" not in s and "解除限售" not in s and "限售股" not in s:
             continue
@@ -92,7 +93,6 @@ def extract_summary(text):
                 parts.append(f"占总股本{m_pct.group(1)}%")
             picks.append(f"解禁{'、'.join(parts)}")
 
-    # 质押类
     for s in sentences:
         if "质押" not in s:
             continue
@@ -110,7 +110,6 @@ def extract_summary(text):
                 parts.append(f"占总股本{m_total.group(1)}%")
             picks.append(f"{kind}{'、'.join(parts)}")
 
-    # 增减持类
     for s in sentences:
         if ("减持" not in s and "增持" not in s) or "质押" in s:
             continue
@@ -156,6 +155,7 @@ def main():
 
     hits = []
     codes = [c for c, _ in STOCKS]
+    debugged = False
     for i in range(0, len(codes), 50):
         batch = ",".join(codes[i:i+50])
         for attempt in range(3):
@@ -164,12 +164,12 @@ def main():
                 lst = (j.get("data") or {}).get("list") or []
                 print(f"  批次{i//50+1}: {len(lst)}条")
                 for a in lst:
+                    if not debugged:
+                        print(f"  [DEBUG] keys: {list(a.keys())}")
+                        print(f"  [DEBUG] 首条原文: {str(a)[:400]}")
+                        debugged = True
                     date = (a.get("notice_date") or "")[:10]
                     title = a.get("title", "")
-                    if date >= since and len([x for x in STOCKS if x[0] in (a.get("sec_code") or a.get("secu_code") or "")]):
-                        print(f"  [DEBUG] 字段keys: {list(a.keys())}")
-                        print(f"  [DEBUG] art_code={a.get('art_code')!r} adjunctUrl={a.get('adjunctUrl')!r} adjunct_url={a.get('adjunct_url')!r}")
-                        print(f"  [DEBUG] 原文前300字: {str(a)[:300]}")
                     if date >= since and any(k in title for k in KEYWORDS):
                         name = a.get("sec_name") or a.get("secu_name") or ""
                         code = a.get("sec_code") or a.get("secu_code") or ""
@@ -178,7 +178,7 @@ def main():
                         hits.append({"name": name, "code": code, "date": date,
                                      "title": title,
                                      "art_code": a.get("art_code", ""),
-                                     "adj_url": a.get("adjunctUrl", "")})
+                                     "adj_url": a.get("adjunctUrl", "") or a.get("adjunct_url", "")})
                 break
             except Exception as e:
                 if attempt < 2:
