@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""财报日历 + 半年报财务数据提取分析
-数据源：akshare（快报+报表+新浪扣非）｜ 每周一 08:30
+"""财报日历 + 半年报财务数据提取分析（快报+报表+新浪扣非）
+数据源：akshare｜ 每周一 08:30
 """
 import akshare as ak
 import os
@@ -36,35 +36,7 @@ def to_float(v):
         return None
 
 
-def to_date(v):
-    """兼容各种日期格式"""
-    if v is None:
-        return None
-    if hasattr(v, "date"):
-        return v.date()
-    s = str(v).strip()[:10]
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            continue
-    return None
-
-
-def fetch_schedule():
-    try:
-        df = ak.stock_report_disclosure()
-        if df is not None and not df.empty:
-            print(f"  [DEBUG] 日程列: {list(df.columns)}")
-            print(f"  [DEBUG] 前3行: {df.head(3).to_string()}")
-            return df
-    except Exception as e:
-        print(f"  披露日程失败: {e}")
-    return None
-
-
 def fetch_yjkb(report_date):
-    """业绩快报（本版列名：营业收入-营业收入/公告日期）"""
     try:
         df = ak.stock_yjkb_em(date=report_date)
         if df is None or df.empty:
@@ -90,7 +62,6 @@ def fetch_yjkb(report_date):
 
 
 def fetch_yjbb(report_date):
-    """业绩报表（列名：营业总收入-营业总收入/最新公告日期）"""
     try:
         df = ak.stock_yjbb_em(date=report_date)
         if df is None or df.empty:
@@ -132,7 +103,6 @@ def fetch_yjyg(report_date):
 
 
 def fetch_kf(code):
-    """新浪财务摘要：扣非（本期+去年同期算同比）"""
     try:
         df = ak.stock_financial_abstract(symbol=code)
         if df is None or df.empty:
@@ -193,25 +163,7 @@ def yi(v):
 
 def main():
     now = datetime.now()
-    today = now.date()
     print(f"[START] 财报日历+业绩分析 {now:%Y-%m-%d %H:%M}")
-
-    sched = {}
-    df = fetch_schedule()
-    if df is not None and not df.empty:
-        for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).zfill(6)
-            if code not in CODE2NAME:
-                continue
-            d = r.get("实际披露日期") or r.get("首次预约")
-            dd = to_date(d)
-            if dd is not None:
-                sched[code] = dd
-        print(f"  披露日程 {len(sched)}/52")
-        if sched:
-            sample = list(sched.values())[:5]
-            print(f"  [DEBUG] 日程日期样例: {sample}")
-            print(f"  [DEBUG] 未来30天内数量: {sum(1 for v in sched.values() if today <= v <= today + timedelta(days=30))}")
 
     yjkb = fetch_yjkb("20260630")
     yjbb = fetch_yjbb("20260630")
@@ -238,20 +190,18 @@ def main():
     yjyg = fetch_yjyg("20260630")
     print(f"  业绩预告 {len(yjyg)} 只")
 
-    reported, upcoming = [], []
+    reported, pre_pending, no_info = [], [], []
     for code, name, attr in STOCKS:
         if code in data:
             reported.append((code, name, attr, data[code], ly.get(code, {})))
-        elif code in sched:
-            dd = sched[code]
-            if today <= dd <= today + timedelta(days=30):
-                upcoming.append((dd, code, name, str(dd), yjyg.get(code, "-")))
-    upcoming.sort()
+        elif code in yjyg:
+            pre_pending.append((name, attr, yjyg[code]))
+        else:
+            no_info.append(name)
     reported.sort(key=lambda x: x[3].get("date", ""))
-    print(f"  [DEBUG] 已披露{len(reported)} 未来30天{len(upcoming)}")
 
     lines = [f"## 📅 财报日历+半年报分析 — {now:%Y.%m.%d}", "",
-             f"> 已披露 {len(reported)} 只 ｜ 未来30天披露 {len(upcoming)} 只", ""]
+             f"> 已披露 {len(reported)} ｜ 有预告 {len(pre_pending)} ｜ 待披露 {len(no_info)} ｜ 8月31日前全出", ""]
 
     if reported:
         lines.append("### 📊 已披露半年报｜成长")
@@ -278,19 +228,19 @@ def main():
             lines.append(f"| {name} | {roe} | {roe_g} | {gm} | {gm_g} | {a} |")
         lines.append("")
 
-    if upcoming:
-        lines.append("### ⏳ 未来30天披露")
-        for dd, code, name, d, yg in upcoming[:20]:
-            lines.append(f"- {dd} {name}：{yg}")
-        if len(upcoming) > 20:
-            lines.append(f"- …共{len(upcoming)}只")
+    if pre_pending:
+        lines.append("### ⏳ 已发预告（待披露）")
+        for name, attr, yg in pre_pending:
+            lines.append(f"- **{name}**[{ATTR_LABEL.get(attr,attr)}]：{yg}")
         lines.append("")
 
-    if not reported and not upcoming:
-        lines.append("半年报季刚开始，暂无已披露/近期披露（下周继续跟）")
+    if no_info:
+        lines.append(f"### 📌 暂无预告（共{len(no_info)}只）")
+        lines.append(f"> {', '.join(no_info[:15])}" + (f"等共{len(no_info)}只" if len(no_info) > 15 else ""))
+        lines.append("")
 
     push(f"📅 财报日历+业绩分析 {now:%Y.%m.%d}", "\n".join(lines))
-    print(f"[DONE] 已披露 {len(reported)}，近期 {len(upcoming)}")
+    print(f"[DONE] 已披露 {len(reported)} 预告 {len(pre_pending)} 待披露 {len(no_info)}")
 
 
 if __name__ == "__main__":
