@@ -2,7 +2,7 @@ name: 大股东增减持
 
 on:
   schedule:
-    - cron: '0 0 * * 1'
+    - cron: '3 0 * * 1'
   workflow_dispatch:
 
 jobs:
