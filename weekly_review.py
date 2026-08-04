@@ -11,6 +11,7 @@ import requests
 import json
 import os
 import sys
+import time
 from datetime import datetime
 
 # ============================================================
@@ -106,17 +107,43 @@ ATTR_LABEL = {
 
 
 def fetch_all_stocks():
-    """批量获取52只股票行情"""
-    try:
-        df = ak.stock_zh_a_spot_em()
-        df["代码"] = df["代码"].astype(str)
-        lookup = {}
-        for _, row in df.iterrows():
-            lookup[row["代码"]] = row
-        return lookup
-    except Exception as e:
-        print(f"[ERROR] 获取行情失败: {e}")
-        return {}
+    """批量获取52只股票行情（重试+单只fallback）"""
+    # ── 方案A：批量拉取，重试3次 ──
+    for attempt in range(3):
+        try:
+            print(f"  批量拉取 第{attempt+1}次...")
+            df = ak.stock_zh_a_spot_em()
+            df["代码"] = df["代码"].astype(str)
+            lookup = {}
+            for _, row in df.iterrows():
+                lookup[row["代码"]] = row
+            print(f"  批量成功，获取 {len(lookup)} 只")
+            return lookup
+        except Exception as e:
+            print(f"  批量失败: {e}")
+            if attempt < 2:
+                wait = (attempt + 1) * 15
+                print(f"  等待{wait}秒重试...")
+                time.sleep(wait)
+
+    # ── 方案B：单只逐个拉取 ──
+    print("  切换到单只拉取模式...")
+    lookup = {}
+    codes = list(set(s["code"] for s in STOCKS))
+    for i, code in enumerate(codes):
+        try:
+            df = ak.stock_zh_a_spot_em()
+            df["代码"] = df["代码"].astype(str)
+            row = df[df["代码"] == code]
+            if not row.empty:
+                lookup[code] = row.iloc[0]
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"  {code} 失败: {e}")
+        if (i + 1) % 10 == 0:
+            print(f"  进度: {i+1}/{len(codes)}")
+    print(f"  单只模式完成，获取 {len(lookup)} 只")
+    return lookup
 
 
 def build_report(all_data):
@@ -125,7 +152,7 @@ def build_report(all_data):
     lines = []
     lines.append(f"## 📊 每周复盘 — {now.strftime('%Y.%m.%d')}")
     lines.append("")
-    lines.append(f"> PE / PB / 股息率 / 距触发价 ｜ 数据截至 {now.strftime('%m-%d %H:%M')}")
+    lines.append(f"> PE / PB / 距触发价 ｜ 数据截至 {now.strftime('%m-%d %H:%M')}")
     lines.append("")
 
     stocks_sorted = sorted(STOCKS, key=lambda s: (ATTR_ORDER.get(s["attr"], 99), s["code"]))
