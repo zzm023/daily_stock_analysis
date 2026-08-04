@@ -25,15 +25,12 @@ CODE2NAME = {c: n for c, n, _ in STOCKS}
 CODE2ATTR = {c: a for c, _, a in STOCKS}
 ATTR_LABEL = {"①": "永续债", "②": "高息", "③": "周期", "④": "寡头", "⑤": "品牌", "⑥": "小众", "⚡": "科技"}
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Referer": "https://data.eastmoney.com/",
-}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 DC_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 
 
 def fetch_report(report_date):
-    """东财业绩报表：营收/净利/扣非/ROE/毛利率+同比，一次拿全"""
+    """东财业绩报表：营收/净利/扣非/ROE/毛利率+同比"""
     out = {}
     try:
         for page in range(1, 6):
@@ -41,14 +38,18 @@ def fetch_report(report_date):
                 "reportName": "RPT_LICO_FN_CPD",
                 "columns": "ALL",
                 "filter": f"(REPORTDATE='{report_date[:4]}-{report_date[4:6]}-{report_date[6:]})",
-                "pageNumber": page, "pageSize": 1000,
-                "sortTypes": "-1", "sortColumns": "UPDATE_DATE",
-                "source": "WEB", "client": "WEB",
+                "pageNumber": str(page),
+                "pageSize": "500",
+                "sortTypes": "-1",
+                "sortColumns": "NOTICE_DATE",
             }
             r = requests.get(DC_URL, params=params, headers=HEADERS, timeout=20)
-            rows = (r.json().get("result") or {}).get("data") or []
-            if not rows:
+            j = r.json()
+            if not j.get("success"):
+                print(f"  {report_date} API返回失败: {str(j)[:200]}")
                 break
+            rows = (j.get("result") or {}).get("data") or []
+            print(f"  {report_date} 第{page}页: {len(rows)}行")
             for row in rows:
                 code = str(row.get("SECURITY_CODE", "")).zfill(6)
                 if code not in CODE2NAME:
@@ -62,18 +63,16 @@ def fetch_report(report_date):
                     "kf_g": row.get("KCFJCXSYJLR_TB"),
                     "roe": row.get("ROEJQ"),
                     "gm": row.get("XSMLL"),
-                    "date": str(row.get("UPDATE_DATE", ""))[:10],
+                    "date": str(row.get("NOTICE_DATE", ""))[:10],
                 }
-            print(f"  {report_date} 第{page}页: {len(rows)}行")
-            if len(rows) < 1000:
+            if len(rows) < 500:
                 break
     except Exception as e:
-        print(f"  {report_date} 数据中心API失败: {e}")
+        print(f"  {report_date} 数据中心API异常: {e}")
     return out
 
 
 def fetch_schedule():
-    """akshare披露日程（新版本无symbol参数）"""
     try:
         import akshare as ak
         df = ak.stock_report_disclosure()
@@ -85,7 +84,6 @@ def fetch_schedule():
 
 
 def fetch_yjyg(report_date):
-    """业绩预告（akshare）"""
     try:
         import akshare as ak
         df = ak.stock_yjyg_em(date=report_date)
@@ -136,7 +134,6 @@ def push(title, content):
 
 
 def yi(v):
-    """元→亿"""
     return v / 1e8 if v is not None else None
 
 
@@ -145,7 +142,6 @@ def main():
     today = now.date()
     print(f"[START] 财报日历+业绩分析 {now:%Y-%m-%d %H:%M}")
 
-    # 1. 披露日程
     sched = {}
     df = fetch_schedule()
     if df is not None and not df.empty:
@@ -158,16 +154,13 @@ def main():
                 sched[code] = str(d)[:10]
     print(f"  披露日程 {len(sched)}/52")
 
-    # 2. 本期 + 去年同期（数据中心API，含扣非）
     data = fetch_report("20260630")
     ly = fetch_report("20250630")
     print(f"  本期 {len(data)} 只 ｜ 去年同期 {len(ly)} 只")
 
-    # 3. 业绩预告
     yjyg = fetch_yjyg("20260630")
     print(f"  业绩预告 {len(yjyg)} 只")
 
-    # 4. 组装
     reported, upcoming = [], []
     for code, name, attr in STOCKS:
         d = sched.get(code, "")
@@ -183,7 +176,6 @@ def main():
     upcoming.sort()
     reported.sort(key=lambda x: x[3].get("date", ""))
 
-    # 5. 报告
     lines = [f"## 📅 财报日历+半年报分析 — {now:%Y.%m.%d}", "",
              f"> 已披露 {len(reported)} 只 ｜ 未来30天披露 {len(upcoming)} 只", ""]
 
