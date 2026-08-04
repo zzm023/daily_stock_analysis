@@ -38,14 +38,39 @@ def fetch_announcements(codes_str):
     return r.json()
 
 
-def fetch_content(art_code):
+def fetch_content(art_code, adjunct_url=""):
+    """先试正文API，拿不到就下载PDF解析"""
+    text = ""
+    if art_code:
+        try:
+            r = requests.get(CONTENT_URL, params={"art_code": art_code, "client_source": "web", "page_index": 1},
+                             headers=HEADERS, timeout=15)
+            html = (r.json().get("data") or {}).get("content") or ""
+            if html:
+                text = re.sub(r"<[^>]+>", " ", html)
+                text = re.sub(r"\s+", " ", text)
+        except Exception:
+            pass
+    if not text and adjunct_url:
+        text = parse_pdf(adjunct_url)
+    return text
+
+
+def parse_pdf(url):
+    """下载PDF并提取文字"""
+    if not url.startswith("http"):
+        url = "https://static.cninfo.com.cn/" + url
     try:
-        r = requests.get(CONTENT_URL, params={"art_code": art_code, "client_source": "web", "page_index": 1},
-                         headers=HEADERS, timeout=15)
-        html = (r.json().get("data") or {}).get("content") or ""
-        text = re.sub(r"<[^>]+>", " ", html)
-        return re.sub(r"\s+", " ", text)
-    except Exception:
+        r = requests.get(url, headers=HEADERS, timeout=20)
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(r.content))
+        parts = []
+        for page in reader.pages[:5]:
+            parts.append(page.extract_text() or "")
+        return re.sub(r"\s+", " ", " ".join(parts))
+    except Exception as e:
+        print(f"  PDF解析失败: {e}")
         return ""
 
 
@@ -151,7 +176,8 @@ def main():
                         if not name and ":" in title:
                             name = title.split(":")[0]
                         hits.append({"name": name, "code": code, "date": date,
-                                     "title": title, "art_code": a.get("art_code", "")})
+                                     "title": title, "art_code": a.get("art_code", ""),
+                                     "adj_url": a.get("adjunctUrl", "")})
                 break
             except Exception as e:
                 if attempt < 2:
@@ -161,7 +187,7 @@ def main():
 
     print(f"  命中 {len(hits)} 条，拉正文...")
     for h in hits:
-        text = fetch_content(h["art_code"]) if h["art_code"] else ""
+                    text = fetch_content(h.get("art_code", ""), h.get("adj_url", ""))
         h["summary"] = extract_summary(text)
         print(f"  🔥 {h['name']} {h['date']} → {h['summary']}")
         time.sleep(0.3)
