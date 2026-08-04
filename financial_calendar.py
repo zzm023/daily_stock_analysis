@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """财报日历 + 半年报财务数据提取分析
-数据源：东财数据中心API直连（含扣非）｜ 每周一 08:30
+数据源：akshare（东财业绩报表+新浪扣非）｜ 每周一 08:30
 """
-import requests
+import akshare as ak
 import os
 from datetime import datetime, timedelta
 
@@ -25,56 +25,19 @@ CODE2NAME = {c: n for c, n, _ in STOCKS}
 CODE2ATTR = {c: a for c, _, a in STOCKS}
 ATTR_LABEL = {"①": "永续债", "②": "高息", "③": "周期", "④": "寡头", "⑤": "品牌", "⑥": "小众", "⚡": "科技"}
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-DC_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 
-
-def fetch_report(report_date):
-    """东财业绩报表：营收/净利/扣非/ROE/毛利率+同比"""
-    out = {}
+def to_float(v):
+    if v is None:
+        return None
+    s = str(v).replace(",", "").replace("%", "").replace("元", "").replace("亿", "").replace("万", "").strip()
     try:
-        for page in range(1, 6):
-            params = {
-                "reportName": "RPT_LICO_FN_CPD",
-                "columns": "ALL",
-                "filter": f"(REPORTDATE='{report_date[:4]}-{report_date[4:6]}-{report_date[6:]})",
-                "pageNumber": str(page),
-                "pageSize": "500",
-                "sortTypes": "-1",
-                "sortColumns": "NOTICE_DATE",
-            }
-            r = requests.get(DC_URL, params=params, headers=HEADERS, timeout=20)
-            j = r.json()
-            if not j.get("success"):
-                print(f"  {report_date} API返回失败: {str(j)[:200]}")
-                break
-            rows = (j.get("result") or {}).get("data") or []
-            print(f"  {report_date} 第{page}页: {len(rows)}行")
-            for row in rows:
-                code = str(row.get("SECURITY_CODE", "")).zfill(6)
-                if code not in CODE2NAME:
-                    continue
-                out[code] = {
-                    "rev": row.get("TOTAL_OPERATE_INCOME"),
-                    "rev_g": row.get("YSTZ"),
-                    "profit": row.get("PARENT_NETPROFIT"),
-                    "profit_g": row.get("SJLTZ"),
-                    "kf": row.get("KCFJCXSYJLR"),
-                    "kf_g": row.get("KCFJCXSYJLR_TB"),
-                    "roe": row.get("ROEJQ"),
-                    "gm": row.get("XSMLL"),
-                    "date": str(row.get("NOTICE_DATE", ""))[:10],
-                }
-            if len(rows) < 500:
-                break
-    except Exception as e:
-        print(f"  {report_date} 数据中心API异常: {e}")
-    return out
+        return float(s)
+    except ValueError:
+        return None
 
 
 def fetch_schedule():
     try:
-        import akshare as ak
         df = ak.stock_report_disclosure()
         if df is not None and not df.empty:
             return df
@@ -83,9 +46,34 @@ def fetch_schedule():
     return None
 
 
+def fetch_yjbb(report_date):
+    """东财业绩报表（akshare，已验证可用）"""
+    try:
+        df = ak.stock_yjbb_em(date=report_date)
+        if df is None or df.empty:
+            return {}
+        out = {}
+        for _, r in df.iterrows():
+            code = str(r.get("股票代码", "")).zfill(6)
+            if code not in CODE2NAME:
+                continue
+            out[code] = {
+                "rev": to_float(r.get("营业总收入-营业总收入")),
+                "rev_g": to_float(r.get("营业总收入-同比增长")),
+                "profit": to_float(r.get("净利润-净利润")),
+                "profit_g": to_float(r.get("净利润-同比增长")),
+                "roe": to_float(r.get("净资产收益率")),
+                "gm": to_float(r.get("销售毛利率")),
+                "date": str(r.get("最新公告日期", ""))[:10],
+            }
+        return out
+    except Exception as e:
+        print(f"  业绩报表失败: {e}")
+        return {}
+
+
 def fetch_yjyg(report_date):
     try:
-        import akshare as ak
         df = ak.stock_yjyg_em(date=report_date)
         if df is None or df.empty:
             return {}
@@ -98,6 +86,29 @@ def fetch_yjyg(report_date):
     except Exception as e:
         print(f"  业绩预告失败: {e}")
         return {}
+
+
+def fetch_kf(code):
+    """新浪财务摘要：扣非净利润（本期+去年同期，算同比）"""
+    try:
+        df = ak.stock_financial_abstract(symbol=code)
+        if df is None or df.empty:
+            return None, None
+        row = df[df["指标"] == "扣非净利润"]
+        if row.empty:
+            return None, None
+        cols = list(df.columns)
+        cur_col = next((c for c in cols if str(c) == "20260630"), None)
+        ly_col = next((c for c in cols if str(c) == "20250630"), None)
+        cur = to_float(row.iloc[0].get(cur_col)) if cur_col else None
+        ly = to_float(row.iloc[0].get(ly_col)) if ly_col else None
+        if cur is not None and ly not in (None, 0):
+            g = (cur - ly) / abs(ly) * 100
+            return cur, g
+        return cur, None
+    except Exception as e:
+        print(f"  {code} 扣非获取失败: {e}")
+        return None, None
 
 
 def analyze(attr, rev_g, profit_g):
@@ -127,6 +138,7 @@ def push(title, content):
     topic = os.getenv("PUSHPLUS_TOPIC")
     if not token:
         print("[WARN] 无TOKEN"); return
+    import requests
     payload = {"token": token, "title": title, "content": content, "template": "markdown"}
     if topic: payload["topic"] = topic
     r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
@@ -154,9 +166,16 @@ def main():
                 sched[code] = str(d)[:10]
     print(f"  披露日程 {len(sched)}/52")
 
-    data = fetch_report("20260630")
-    ly = fetch_report("20250630")
+    data = fetch_yjbb("20260630")
+    ly = fetch_yjbb("20250630")
     print(f"  本期 {len(data)} 只 ｜ 去年同期 {len(ly)} 只")
+
+    # 扣非：只对已披露的拉（新浪）
+    for code in list(data.keys()):
+        kf, kf_g = fetch_kf(code)
+        data[code]["kf"] = kf
+        data[code]["kf_g"] = kf_g
+        print(f"  {code} 扣非: {kf} ({kf_g}%)")
 
     yjyg = fetch_yjyg("20260630")
     print(f"  业绩预告 {len(yjyg)} 只")
@@ -188,8 +207,8 @@ def main():
             rev_g = f"{y['rev_g']:+.1f}%" if y["rev_g"] is not None else "-"
             pf = f"{yi(y['profit']):.1f}" if y["profit"] is not None else "-"
             pf_g = f"{y['profit_g']:+.1f}%" if y["profit_g"] is not None else "-"
-            kf = f"{yi(y['kf']):.1f}" if y["kf"] is not None else "-"
-            kf_g = f"{y['kf_g']:+.1f}%" if y["kf_g"] is not None else "-"
+            kf = f"{yi(y.get('kf')):.1f}" if y.get("kf") is not None else "-"
+            kf_g = f"{y.get('kf_g'):+.1f}%" if y.get("kf_g") is not None else "-"
             lines.append(f"| {name} | {rev} | {rev_g} | {pf} | {pf_g} | {kf} | {kf_g} |")
         lines.append("")
         lines.append("### 📊 已披露半年报｜质量+简析")
@@ -200,7 +219,7 @@ def main():
             gm = f"{y['gm']:.1f}%" if y["gm"] is not None else "-"
             roe_g = f"{y['roe'] - l['roe']:+.1f}pp" if (y["roe"] is not None and l.get("roe") is not None) else "-"
             gm_g = f"{y['gm'] - l['gm']:+.1f}pp" if (y["gm"] is not None and l.get("gm") is not None) else "-"
-            a = analyze(CODE2ATTR[code], y["rev_g"], y["kf_g"] if y["kf_g"] is not None else y["profit_g"])
+            a = analyze(CODE2ATTR[code], y["rev_g"], y.get("kf_g") if y.get("kf_g") is not None else y["profit_g"])
             lines.append(f"| {name} | {roe} | {roe_g} | {gm} | {gm_g} | {a} |")
         lines.append("")
 
