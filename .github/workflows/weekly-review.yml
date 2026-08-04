@@ -2,7 +2,8 @@ name: 每周复盘
 
 on:
   schedule:
-    - cron: '0 12 * * 5'
+    # 每周六 北京时间18:00 = UTC 10:00
+    - cron: '0 10 * * 6'
   workflow_dispatch:
 
 jobs:
