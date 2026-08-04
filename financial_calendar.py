@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""财报日历 + 半年报财务数据提取分析（营收/净利/扣非/ROE/毛利率+同比）
-数据源：akshare（东财）｜ 每周一 08:30
+"""财报日历 + 半年报财务数据提取分析
+数据源：东财数据中心API直连（含扣非）｜ 每周一 08:30
 """
-import akshare as ak
+import requests
 import os
 from datetime import datetime, timedelta
 
@@ -25,99 +25,69 @@ CODE2NAME = {c: n for c, n, _ in STOCKS}
 CODE2ATTR = {c: a for c, _, a in STOCKS}
 ATTR_LABEL = {"①": "永续债", "②": "高息", "③": "周期", "④": "寡头", "⑤": "品牌", "⑥": "小众", "⚡": "科技"}
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Referer": "https://data.eastmoney.com/",
+}
+DC_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 
-def to_float(v):
-    if v is None:
-        return None
-    s = str(v).replace(",", "").replace("%", "").replace("元", "").replace("亿", "").replace("万", "").strip()
+
+def fetch_report(report_date):
+    """东财业绩报表：营收/净利/扣非/ROE/毛利率+同比，一次拿全"""
+    out = {}
     try:
-        return float(s)
-    except ValueError:
-        return None
+        for page in range(1, 6):
+            params = {
+                "reportName": "RPT_LICO_FN_CPD",
+                "columns": "ALL",
+                "filter": f"(REPORTDATE='{report_date[:4]}-{report_date[4:6]}-{report_date[6:]})",
+                "pageNumber": page, "pageSize": 1000,
+                "sortTypes": "-1", "sortColumns": "UPDATE_DATE",
+                "source": "WEB", "client": "WEB",
+            }
+            r = requests.get(DC_URL, params=params, headers=HEADERS, timeout=20)
+            rows = (r.json().get("result") or {}).get("data") or []
+            if not rows:
+                break
+            for row in rows:
+                code = str(row.get("SECURITY_CODE", "")).zfill(6)
+                if code not in CODE2NAME:
+                    continue
+                out[code] = {
+                    "rev": row.get("TOTAL_OPERATE_INCOME"),
+                    "rev_g": row.get("YSTZ"),
+                    "profit": row.get("PARENT_NETPROFIT"),
+                    "profit_g": row.get("SJLTZ"),
+                    "kf": row.get("KCFJCXSYJLR"),
+                    "kf_g": row.get("KCFJCXSYJLR_TB"),
+                    "roe": row.get("ROEJQ"),
+                    "gm": row.get("XSMLL"),
+                    "date": str(row.get("UPDATE_DATE", ""))[:10],
+                }
+            print(f"  {report_date} 第{page}页: {len(rows)}行")
+            if len(rows) < 1000:
+                break
+    except Exception as e:
+        print(f"  {report_date} 数据中心API失败: {e}")
+    return out
 
 
 def fetch_schedule():
-    for fn_name in ("stock_report_disclosure", "stock_report_disclosure_em", "stock_disclosure_schedule"):
-        f = getattr(ak, fn_name, None)
-        if f is None:
-            continue
-        try:
-            df = f(symbol="预约披露时间")
-            if df is not None and not df.empty:
-                print(f"  用 {fn_name}(symbol=) 成功")
-                return df
-        except TypeError:
-            pass
-        except Exception as e:
-            print(f"  {fn_name}(symbol=) 失败: {e}")
-        try:
-            df = f()
-            if df is not None and not df.empty:
-                print(f"  用 {fn_name}() 成功")
-                return df
-        except Exception as e:
-            print(f"  {fn_name}() 失败: {e}")
+    """akshare披露日程（新版本无symbol参数）"""
+    try:
+        import akshare as ak
+        df = ak.stock_report_disclosure()
+        if df is not None and not df.empty:
+            return df
+    except Exception as e:
+        print(f"  披露日程失败: {e}")
     return None
 
 
-def fetch_yjkb(report_date):
-    try:
-        df = ak.stock_yjkb_em(date=report_date)
-        if df is None or df.empty:
-            return {}
-        out = {}
-        for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).zfill(6)
-            if code not in CODE2NAME:
-                continue
-            if code in ("600299", "002032"):
-                print(f"  [DEBUG] {code} 快报原始列: {list(df.columns)}")
-                print(f"  [DEBUG] {code} 快报原始值: {r.to_dict()}")
-            out[code] = {
-                "rev": to_float(r.get("营业总收入")),
-                "rev_g": to_float(r.get("营业总收入-同比增长")),
-                "profit": to_float(r.get("净利润")),
-                "profit_g": to_float(r.get("净利润-同比增长")),
-                "kf": to_float(r.get("扣非净利润")),
-                "kf_g": to_float(r.get("扣非净利润-同比增长")),
-                "roe": to_float(r.get("净资产收益率")),
-                "gm": to_float(r.get("销售毛利率")),
-                "date": str(r.get("最新公告日期", ""))[:10],
-            }
-        return out
-    except Exception as e:
-        print(f"  业绩快报失败: {e}")
-        return {}
-
-
-def fetch_yjbb(report_date):
-    try:
-        df = ak.stock_yjbb_em(date=report_date)
-        if df is None or df.empty:
-            return {}
-        out = {}
-        for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).zfill(6)
-            if code not in CODE2NAME:
-                continue
-            out[code] = {
-                "rev": to_float(r.get("营业总收入-营业总收入")),
-                "rev_g": to_float(r.get("营业总收入-同比增长")),
-                "profit": to_float(r.get("净利润-净利润")),
-                "profit_g": to_float(r.get("净利润-同比增长")),
-                "kf": None, "kf_g": None,
-                "roe": to_float(r.get("净资产收益率")),
-                "gm": to_float(r.get("销售毛利率")),
-                "date": str(r.get("最新公告日期", ""))[:10],
-            }
-        return out
-    except Exception as e:
-        print(f"  业绩报表失败: {e}")
-        return {}
-
-
 def fetch_yjyg(report_date):
+    """业绩预告（akshare）"""
     try:
+        import akshare as ak
         df = ak.stock_yjyg_em(date=report_date)
         if df is None or df.empty:
             return {}
@@ -159,11 +129,15 @@ def push(title, content):
     topic = os.getenv("PUSHPLUS_TOPIC")
     if not token:
         print("[WARN] 无TOKEN"); return
-    import requests
     payload = {"token": token, "title": title, "content": content, "template": "markdown"}
     if topic: payload["topic"] = topic
     r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
     print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
+
+
+def yi(v):
+    """元→亿"""
+    return v / 1e8 if v is not None else None
 
 
 def main():
@@ -171,45 +145,34 @@ def main():
     today = now.date()
     print(f"[START] 财报日历+业绩分析 {now:%Y-%m-%d %H:%M}")
 
+    # 1. 披露日程
     sched = {}
-    try:
-        df = fetch_schedule()
-        if df is not None and not df.empty:
-            for _, r in df.iterrows():
-                code = str(r.get("股票代码", "")).zfill(6)
-                if code not in CODE2NAME:
-                    continue
-                d = r.get("实际披露日期") or r.get("首次预约")
-                if d is not None and str(d).strip():
-                    sched[code] = str(d)[:10]
-        print(f"  披露日程 {len(sched)}/52")
-    except Exception as e:
-        print(f"  披露日程失败: {e}")
+    df = fetch_schedule()
+    if df is not None and not df.empty:
+        for _, r in df.iterrows():
+            code = str(r.get("股票代码", "")).zfill(6)
+            if code not in CODE2NAME:
+                continue
+            d = r.get("实际披露日期") or r.get("首次预约")
+            if d is not None and str(d).strip():
+                sched[code] = str(d)[:10]
+    print(f"  披露日程 {len(sched)}/52")
 
-    yjkb = fetch_yjkb("20260630")
-    yjbb = fetch_yjbb("20260630")
-    data = {}
-    for code in CODE2NAME:
-        if code in yjkb:
-            data[code] = yjkb[code]
-        elif code in yjbb:
-            data[code] = yjbb[code]
-    print(f"  本期财务 {len(data)} 只（快报{len(yjkb)}/报表{len(yjbb)}）")
+    # 2. 本期 + 去年同期（数据中心API，含扣非）
+    data = fetch_report("20260630")
+    ly = fetch_report("20250630")
+    print(f"  本期 {len(data)} 只 ｜ 去年同期 {len(ly)} 只")
 
-    ly_map = {}
-    ly = fetch_yjbb("20250630")
-    for code, v in ly.items():
-        ly_map[code] = {"roe": v.get("roe"), "gm": v.get("gm")}
-    print(f"  去年同期 {len(ly_map)} 只")
-
+    # 3. 业绩预告
     yjyg = fetch_yjyg("20260630")
     print(f"  业绩预告 {len(yjyg)} 只")
 
+    # 4. 组装
     reported, upcoming = [], []
     for code, name, attr in STOCKS:
         d = sched.get(code, "")
         if code in data:
-            reported.append((code, name, attr, data[code], ly_map.get(code, {})))
+            reported.append((code, name, attr, data[code], ly.get(code, {})))
         elif d:
             try:
                 dd = datetime.strptime(d, "%Y-%m-%d").date()
@@ -220,6 +183,7 @@ def main():
     upcoming.sort()
     reported.sort(key=lambda x: x[3].get("date", ""))
 
+    # 5. 报告
     lines = [f"## 📅 财报日历+半年报分析 — {now:%Y.%m.%d}", "",
              f"> 已披露 {len(reported)} 只 ｜ 未来30天披露 {len(upcoming)} 只", ""]
 
@@ -228,11 +192,11 @@ def main():
         lines.append("| 股票 | 营收(亿) | 营收同比 | 净利(亿) | 净利同比 | 扣非(亿) | 扣非同比 |")
         lines.append("|------|---------|---------|---------|---------|---------|---------|")
         for code, name, attr, y, l in reported:
-            rev = f"{y['rev']:.1f}" if y["rev"] is not None else "-"
+            rev = f"{yi(y['rev']):.1f}" if y["rev"] is not None else "-"
             rev_g = f"{y['rev_g']:+.1f}%" if y["rev_g"] is not None else "-"
-            pf = f"{y['profit']:.1f}" if y["profit"] is not None else "-"
+            pf = f"{yi(y['profit']):.1f}" if y["profit"] is not None else "-"
             pf_g = f"{y['profit_g']:+.1f}%" if y["profit_g"] is not None else "-"
-            kf = f"{y['kf']:.1f}" if y["kf"] is not None else "-"
+            kf = f"{yi(y['kf']):.1f}" if y["kf"] is not None else "-"
             kf_g = f"{y['kf_g']:+.1f}%" if y["kf_g"] is not None else "-"
             lines.append(f"| {name} | {rev} | {rev_g} | {pf} | {pf_g} | {kf} | {kf_g} |")
         lines.append("")
