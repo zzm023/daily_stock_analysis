@@ -22,8 +22,8 @@ STOCKS = [
     ("300124","汇川技术","⚡"),("002837","英维克","⚡"),("300627","华测导航","⚡"),("002410","广联达","⚡"),
 ]
 CODE2NAME = {c: n for c, n, _ in STOCKS}
-ATTR_LABEL = {"①": "永续债", "②": "高息", "③": "周期", "④": "寡头", "⑤": "品牌", "⑥": "小众", "⚡": "科技"}
 CODE2ATTR = {c: a for c, _, a in STOCKS}
+ATTR_LABEL = {"①": "永续债", "②": "高息", "③": "周期", "④": "寡头", "⑤": "品牌", "⑥": "小众", "⚡": "科技"}
 
 
 def to_float(v):
@@ -37,7 +37,28 @@ def to_float(v):
 
 
 def fetch_schedule():
-    return ak.stock_report_disclosure(symbol="预约披露时间")
+    """兼容akshare新旧版本的披露日程接口"""
+    for fn_name in ("stock_report_disclosure", "stock_report_disclosure_em", "stock_disclosure_schedule"):
+        f = getattr(ak, fn_name, None)
+        if f is None:
+            continue
+        try:
+            df = f(symbol="预约披露时间")
+            if df is not None and not df.empty:
+                print(f"  用 {fn_name}(symbol=) 成功")
+                return df
+        except TypeError:
+            pass
+        except Exception as e:
+            print(f"  {fn_name}(symbol=) 失败: {e}")
+        try:
+            df = f()
+            if df is not None and not df.empty:
+                print(f"  用 {fn_name}() 成功")
+                return df
+        except Exception as e:
+            print(f"  {fn_name}() 失败: {e}")
+    return None
 
 
 def fetch_yjkb(report_date):
@@ -69,7 +90,7 @@ def fetch_yjkb(report_date):
 
 
 def fetch_yjbb(report_date):
-    """业绩报表：兜底"""
+    """业绩报表：兜底（无扣非）"""
     try:
         df = ak.stock_yjbb_em(date=report_date)
         if df is None or df.empty:
@@ -152,19 +173,20 @@ def main():
     print(f"[START] 财报日历+业绩分析 {now:%Y-%m-%d %H:%M}")
 
     # 1. 披露日程
+    sched = {}
     try:
         df = fetch_schedule()
-        sched = {}
-        for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).zfill(6)
-            if code not in CODE2NAME:
-                continue
-            d = r.get("实际披露日期") or r.get("首次预约")
-            if d is not None and str(d).strip():
-                sched[code] = str(d)[:10]
+        if df is not None and not df.empty:
+            for _, r in df.iterrows():
+                code = str(r.get("股票代码", "")).zfill(6)
+                if code not in CODE2NAME:
+                    continue
+                d = r.get("实际披露日期") or r.get("首次预约")
+                if d is not None and str(d).strip():
+                    sched[code] = str(d)[:10]
         print(f"  披露日程 {len(sched)}/52")
     except Exception as e:
-        print(f"  披露日程失败: {e}"); sched = {}
+        print(f"  披露日程失败: {e}")
 
     # 2. 本期数据：快报优先（含扣非），报表兜底
     yjkb = fetch_yjkb("20260630")
@@ -178,8 +200,8 @@ def main():
     print(f"  本期财务 {len(data)} 只（快报{len(yjkb)}/报表{len(yjbb)}）")
 
     # 3. 去年同期报表（算ROE/毛利率同比）
-    ly = fetch_yjbb("20250630")
     ly_map = {}
+    ly = fetch_yjbb("20250630")
     for code, v in ly.items():
         ly_map[code] = {"roe": v.get("roe"), "gm": v.get("gm")}
     print(f"  去年同期 {len(ly_map)} 只")
@@ -221,14 +243,8 @@ def main():
             kf_g = f"{y['kf_g']:+.1f}%" if y["kf_g"] is not None else "-"
             roe = f"{y['roe']:.1f}%" if y["roe"] is not None else "-"
             gm = f"{y['gm']:.1f}%" if y["gm"] is not None else "-"
-            if y["roe"] is not None and l.get("roe") is not None:
-                roe_g = f"{y['roe'] - l['roe']:+.1f}pp"
-            else:
-                roe_g = "-"
-            if y["gm"] is not None and l.get("gm") is not None:
-                gm_g = f"{y['gm'] - l['gm']:+.1f}pp"
-            else:
-                gm_g = "-"
+            roe_g = f"{y['roe'] - l['roe']:+.1f}pp" if (y["roe"] is not None and l.get("roe") is not None) else "-"
+            gm_g = f"{y['gm'] - l['gm']:+.1f}pp" if (y["gm"] is not None and l.get("gm") is not None) else "-"
             a = analyze(CODE2ATTR[code], y["rev_g"], y["kf_g"] if y["kf_g"] is not None else y["profit_g"])
             lines.append(f"| {name} | {rev} | {rev_g} | {pf} | {pf_g} | {kf} | {kf_g} | {roe} | {roe_g} | {gm} | {gm_g} | {a} |")
         lines.append("")
