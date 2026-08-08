@@ -26,21 +26,17 @@ CUTOFF = (datetime.now() - timedelta(days=365)).date()
 
 
 def parse_date(v):
-    """兼容 datetime / date / NaT / NaN / str"""
     if v is None:
         return None
-    # NaT / NaN: self != self
     try:
         if v != v:
             return None
     except TypeError:
         return None
-    # datetime or date
     if isinstance(v, datetime):
         return v.date()
     if isinstance(v, date_type):
         return v
-    # string
     s = str(v).strip()[:19]
     for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d", "%Y%m%d"):
         try:
@@ -51,7 +47,6 @@ def parse_date(v):
 
 
 def fetch_dps(code):
-    """akshare拉近18个月分红（派息÷10=每股）"""
     try:
         import akshare as ak
         df = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
@@ -135,17 +130,32 @@ def main():
         print(f"  {v['name']}: DPS={dps:.3f}[{src}] 价={price:.2f} 息率={yld:.2f}%")
 
     rows.sort(key=lambda x: -x[5])
-        lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
+    lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
              f"> DPS：12M实派 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", ""]
 
     for name, code, price, dps, src, yld, anchor, gap in rows:
         trigger_price = round(dps / anchor * 100, 2) if dps and anchor else 0
-        status = (f"🔴 已触发（超{-gap:.1f}pp）" if gap < 0 
-                  else (f"🎯 持平" if gap == 0 
-                  else f"🟢 差{trigger_price - price:+.2f}元"))
+        diff = trigger_price - price
+        if gap < 0:
+            status = f"🔴 已触发（超{-gap:.1f}pp）"
+        elif gap == 0:
+            status = "🎯 持平"
+        else:
+            status = f"🟢 差{diff:+.2f}元"
         lines.append(f"**{name}**")
         lines.append(f"现价 {price:.2f} → 触发价 {trigger_price:.2f} | 股息率 {yld:.2f}% | 锚定 {anchor:.1f}% | {status}")
         lines.append("")
+
+    triggered = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g <= 0]
+    close = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g > 0 and g <= 0.5]
+    if triggered:
+        lines.append("### 🔴 已触发")
+        for n, g, y in triggered:
+            lines.append(f"- {n}：{y:.2f}%（超额{-g:.1f}pp）")
+    if close:
+        lines.append("### 🟡 接近触发")
+        for n, g, y in close:
+            lines.append(f"- {n}：{y:.2f}%，差{g:.1f}pp")
 
     push(f"💰 股息率周报 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"[DONE] {len(rows)} 只")
