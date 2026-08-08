@@ -120,6 +120,9 @@ def main():
         if code == "002027":
             dps = v["dps"]
             src = "手动校正"
+        if code == "600036":
+            dps = v["dps"]
+            src = "手动校正"
         if code == "600036" and dps is not None:
             print(f"  [OK] 招商银行DPS={dps} [{src}]")
         if dps is None:
@@ -132,30 +135,17 @@ def main():
         print(f"  {v['name']}: DPS={dps:.3f}[{src}] 价={price:.2f} 息率={yld:.2f}%")
 
     rows.sort(key=lambda x: -x[5])
-    lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
-             f"> DPS：12M实派 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", "",
-             "| 股票 | 现价 | 触发价 | DPS | 股息率 | 锚定 | 距触发 |",
-             "|------|------|--------|-----|--------|------|--------|"]
+        lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
+             f"> DPS：12M实派 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", ""]
 
     for name, code, price, dps, src, yld, anchor, gap in rows:
-       trigger_price = round(dps / anchor * 100, 2) if dps and anchor else 0  # 新增
-       tp = f"{trigger_price:.2f}" if trigger_price else "-"
-       ps = f"{price:.2f}" if price else "-"
-       dp = f"{dps:.3f}" if dps else "-"
-       ys = f"{yld:.2f}%" if yld else "-"
-       gs = f"🟢 差{gap:+.1f}pp" if gap > 0 else (f"● 超额{-gap:.1f}pp" if gap < 0 else "🎯 持平")
-       lines.append(f"| {name} | {ps} | {tp} | {dp} | {ys} | {anchor:.1f}% | {gs} |")
-
-    triggered = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g <= 0]
-    close = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g > 0 and g <= 0.5]
-    if triggered:
-        lines.append(""); lines.append("### 🔴 已触发")
-        for n, g, y in triggered:
-            lines.append(f"- {n}：{y:.2f}%（超额{-g:.1f}pp）")
-    if close:
-        lines.append(""); lines.append("### 🟡 接近触发")
-        for n, g, y in close:
-            lines.append(f"- {n}：{y:.2f}%，差{g:.1f}pp")
+        trigger_price = round(dps / anchor * 100, 2) if dps and anchor else 0
+        status = (f"🔴 已触发（超{-gap:.1f}pp）" if gap < 0 
+                  else (f"🎯 持平" if gap == 0 
+                  else f"🟢 差{trigger_price - price:+.2f}元"))
+        lines.append(f"**{name}**")
+        lines.append(f"现价 {price:.2f} → 触发价 {trigger_price:.2f} | 股息率 {yld:.2f}% | 锚定 {anchor:.1f}% | {status}")
+        lines.append("")
 
     push(f"💰 股息率周报 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"[DONE] {len(rows)} 只")
