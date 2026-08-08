@@ -1,6 +1,6 @@
 """
 触发价监控脚本
-用途：扫描52只框架股票，价格触及买入线 → PushPlus 推送
+用途：扫描50只框架股票，价格触及买入线 → PushPlus 推送
 用法：python price_monitor.py
 环境变量：PUSHPLUS_TOKEN（必填）、PUSHPLUS_TOPIC（可选）
 """
@@ -15,13 +15,12 @@ STOCKS = [
     # 优先1
     {"code": "000651", "name": "格力电器",   "trigger": 38.00, "attr": "④全球寡头"},
     {"code": "000157", "name": "中联重科",   "trigger": 7.00,  "attr": "③周期拐点"},
-    {"code": "600036", "name": "招商银行",   "trigger": 35.00, "attr": "①永续债"},
+    {"code": "600036", "name": "招商银行",   "trigger": 33.65, "attr": "①永续债"},
     {"code": "601601", "name": "中国太保",   "trigger": 30.00, "attr": "①永续债"},
-    {"code": "000895", "name": "双汇发展",   "trigger": 22.00, "attr": "②高息成长"},
-    {"code": "600018", "name": "上港集团",   "trigger": 4.80,  "attr": "①永续债"},
-    {"code": "601816", "name": "京沪高铁",   "trigger": 4.80,  "attr": "①永续债"},
-    {"code": "600900", "name": "长江电力",   "trigger": None,  "attr": "①永续债", "note": "息率≥4%"},
-    {"code": "600941", "name": "中国移动",   "trigger": 90.00, "attr": "①永续债"},
+    {"code": "600018", "name": "上港集团",   "trigger": 3.82,  "attr": "①永续债"},
+    {"code": "601816", "name": "京沪高铁",   "trigger": 3.80,  "attr": "①永续债"},
+    {"code": "600900", "name": "长江电力",   "trigger": 19.75,  "attr": "①永续债"},
+    {"code": "600941", "name": "中国移动",   "trigger": 85.45, "attr": "①永续债"},
     {"code": "002027", "name": "分众传媒",   "trigger": 5.26,  "attr": "⑤品牌心智"},
     {"code": "600066", "name": "宇通客车",   "trigger": 27.00, "attr": "④全球寡头"},
     {"code": "000538", "name": "云南白药",   "trigger": 47.00, "attr": "⑤品牌心智"},
@@ -42,7 +41,7 @@ STOCKS = [
     {"code": "000792", "name": "盐湖股份",   "trigger": 25.00, "attr": "③周期拐点"},
     {"code": "603288", "name": "海天味业",   "trigger": 30.00, "attr": "⑥小众冠军"},
     {"code": "600298", "name": "安琪酵母",   "trigger": 35.00, "attr": "⑤品牌心智"},
-    {"code": "000429", "name": "粤高速A",    "trigger": 10.50, "attr": "①永续债观察"},
+    {"code": "000429", "name": "粤高速A",    "trigger": 10.41, "attr": "①永续债观察"},
     {"code": "600406", "name": "国电南瑞",   "trigger": 20.00, "attr": "①永续债"},
     {"code": "600660", "name": "福耀玻璃",   "trigger": 50.00, "attr": "④全球寡头"},
     {"code": "300628", "name": "亿联网络",   "trigger": 33.00, "attr": "⑤品牌心智"},
@@ -56,7 +55,6 @@ STOCKS = [
     {"code": "600761", "name": "安徽合力",   "trigger": 16.50, "attr": "④全球寡头"},
     {"code": "600486", "name": "扬农化工",   "trigger": 52.00, "attr": "④全球寡头"},
     {"code": "600188", "name": "兖矿能源",   "trigger": 15.50, "attr": "③周期拐点"},
-    {"code": "000848", "name": "承德露露",   "trigger": 8.00,  "attr": "②高息成长"},
     {"code": "601058", "name": "赛轮轮胎",   "trigger": 12.00, "attr": "④全球寡头"},
     {"code": "603508", "name": "思维列控",   "trigger": 21.60, "attr": "⑥小众冠军"},
     # 优先4-5
