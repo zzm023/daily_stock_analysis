@@ -134,15 +134,17 @@ def main():
     rows.sort(key=lambda x: -x[5])
     lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
              f"> DPS：12M实派 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", "",
-             "| 股票 | 现价 | DPS | 股息率 | 锚定 | 距锚定 |",
-             "|------|------|-----|--------|------|--------|"]
+             "| 股票 | 现价 | 触发价 | DPS | 股息率 | 锚定 | 距触发 |",
+             "|------|------|--------|-----|--------|------|--------|"]
 
     for name, code, price, dps, src, yld, anchor, gap in rows:
-        ps = f"{price:.2f}" if price else "-"
-        dp = f"{dps:.3f}" if dps else "-"
-        ys = f"{yld:.2f}%" if yld else "-"
-        gs = f"🟢 差{gap:+.1f}pp" if gap > 0 else (f"● 超额{-gap:.1f}pp" if gap < 0 else "🎯 持平")
-        lines.append(f"| {name} | {ps} | {dp} | {ys} | {anchor:.1f}% | {gs} |")
+       trigger_price = round(dps / anchor * 100, 2) if dps and anchor else 0  # 新增
+       tp = f"{trigger_price:.2f}" if trigger_price else "-"
+       ps = f"{price:.2f}" if price else "-"
+       dp = f"{dps:.3f}" if dps else "-"
+       ys = f"{yld:.2f}%" if yld else "-"
+       gs = f"🟢 差{gap:+.1f}pp" if gap > 0 else (f"● 超额{-gap:.1f}pp" if gap < 0 else "🎯 持平")
+       lines.append(f"| {name} | {ps} | {tp} | {dp} | {ys} | {anchor:.1f}% | {gs} |")
 
     triggered = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g <= 0]
     close = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g > 0 and g <= 0.5]
