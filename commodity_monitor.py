@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-大宗商品价格监控 v6
+大宗商品价格监控 v8
 数据源：akshare期货 + 100ppi品种子站新闻列表
+每周一推送完整报告，每日仍有告警实时推送
 """
 
 import requests
@@ -11,7 +12,6 @@ import re
 from datetime import datetime, date
 from pathlib import Path
 
-# 品种配置：期货用akshare，现货用100ppi子站
 COMMODITIES = {
     "碳酸锂": {
         "stocks": ["盐湖股份(000792)"], "level": "daily",
@@ -26,7 +26,8 @@ COMMODITIES = {
     "纯MDI": {
         "stocks": ["万华化学(600309)"], "level": "daily",
         "unit": "元/吨", "threshold": 0.02,
-        "ppi_sub": "mdi.100ppi.com",
+        "ppi_sub": "www.100ppi.com",
+        "title_filter": "纯MDI",
     },
     "钛白粉(金红石型)": {
         "stocks": ["龙佰集团(002601)"], "level": "weekly",
@@ -70,7 +71,7 @@ PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 DATA_FILE = Path(__file__).parent / "commodity_prices.json"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
@@ -90,7 +91,6 @@ def get_akshare_futures(code):
                         val = float(df.iloc[-1][orig])
                         if val > 0:
                             return {"price": val, "date": str(date.today()), "change_pct": None}
-                # 最后尝试：取最后一行的数值列
                 row = df.iloc[-1]
                 for orig in df.columns:
                     try:
@@ -106,25 +106,26 @@ def get_akshare_futures(code):
     return None
 
 
-def get_ppi_sub_price(subdomain, keyword):
-    """从100ppi品种子站新闻列表提取基准价"""
+def get_ppi_sub_price(subdomain, keyword, title_filter=None):
     try:
         url = f"https://{subdomain}/news/list---1.html"
         resp = requests.get(url, headers=HEADERS, timeout=20)
         resp.encoding = "utf-8"
         html = resp.text
 
-        # 匹配新闻标题中的基准价
-        # 格式: "X月X日生意社XXX基准价为XXXXX.XX元/吨"
         pat = rf'基准价[为是](\d+[\.\d]*)元'
         matches = re.findall(pat, html)
         if matches:
             for m in matches:
                 p = float(m)
                 if 100 < p < 10000000:
+                    if title_filter:
+                        idx = html.find(m)
+                        ctx = html[max(0,idx-500):idx+100]
+                        if title_filter not in ctx:
+                            continue
                     return {"price": p, "date": str(date.today()), "change_pct": None}
 
-        # 更宽松匹配：任何价格格式
         pat2 = r'(\d{4,7}\.\d{2})\s*元/[吨公斤]'
         matches2 = re.findall(pat2, html)
         for m in matches2:
@@ -133,13 +134,11 @@ def get_ppi_sub_price(subdomain, keyword):
                 idx = html.find(m)
                 ctx = html[max(0,idx-300):idx+100]
                 if keyword in ctx or "基准价" in ctx or "报价" in ctx:
+                    if title_filter and title_filter not in ctx:
+                        continue
                     return {"price": p, "date": str(date.today()), "change_pct": None}
 
         print(f"    [子站] {subdomain} 页面已获取但未匹配价格")
-        # 调试：打印页面标题
-        title_m = re.search(r'<title>([^<]+)</title>', html)
-        if title_m:
-            print(f"    页面标题: {title_m.group(1)[:100]}")
     except Exception as e:
         print(f"    [子站] {subdomain} 异常: {e}")
     return None
@@ -152,8 +151,9 @@ def get_commodity_price(name, cfg):
             print(f"    [akshare期货] ✅")
             return result
     if "ppi_sub" in cfg:
-        kw = name.split("(")[0]  # 去掉括号里的规格
-        result = get_ppi_sub_price(cfg["ppi_sub"], kw)
+        kw = name.split("(")[0]
+        tf = cfg.get("title_filter")
+        result = get_ppi_sub_price(cfg["ppi_sub"], kw, tf)
         if result:
             print(f"    [100ppi子站] ✅")
             return result
@@ -174,7 +174,7 @@ def save_history(data):
 
 def pushplus_send(title, content):
     if not PUSHPLUS_TOKEN:
-        return
+        print("  [PushPlus] 未配置TOKEN"); return
     try:
         payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
         if PUSHPLUS_TOPIC:
@@ -186,16 +186,19 @@ def pushplus_send(title, content):
 
 
 def should_check_today(cfg):
-    return cfg.get("level") == "daily" or datetime.now().weekday() == 0
+    if cfg.get("level") == "daily":
+        return True
+    return datetime.now().weekday() == 0
 
 
 def main():
     today = datetime.now()
     wd = ['一','二','三','四','五','六','日']
-    print(f"=== 大宗商品监控 v6 | {today.strftime('%Y-%m-%d %H:%M')} 周{wd[today.weekday()]} ===")
+    is_monday = today.weekday() == 0
+    print(f"=== 大宗商品监控 v8 | {today.strftime('%Y-%m-%d %H:%M')} 周{wd[today.weekday()]} ===")
 
     history = load_history()
-    alerts, weekly_items = [], []
+    alerts, all_rows = [], []
     all_data, ok, fail = {}, 0, 0
 
     for name, cfg in COMMODITIES.items():
@@ -212,46 +215,60 @@ def main():
         ok += 1
         np_ = result["price"]
         old = history.get(name, {}).get("price")
-        record = {"price": np_, "date": result["date"], "unit": cfg["unit"],
-                   "stocks": ", ".join(cfg["stocks"]), "_name": name}
-        all_data[name] = record
-        print(f"  ✅ {np_:,.0f} {cfg['unit']}")
+        chg = None
         if old and old > 0:
-            chg = (np_ - old) / old
-            record["change_pct"] = round(chg, 4)
+            chg = round((np_ - old) / old, 4)
             d = "↑" if chg>0 else "↓" if chg<0 else "→"
-            print(f"     上次: {old:,.0f}  |  {d} {abs(chg)*100:.1f}%")
+            print(f"  ✅ {np_:,.0f} {cfg['unit']} | {d} {abs(chg)*100:.1f}%")
             if abs(chg) >= cfg["threshold"]:
                 alerts.append({"name":name,"price":np_,"old_price":old,"change_pct":chg,
                                "stocks":cfg["stocks"],"unit":cfg["unit"]})
-        if cfg.get("level")=="weekly" and today.weekday()==0:
-            weekly_items.append(record)
+        else:
+            print(f"  ✅ {np_:,.0f} {cfg['unit']}（首次）")
+
+        record = {"price": np_, "date": result["date"], "unit": cfg["unit"],
+                   "stocks": ", ".join(cfg["stocks"]), "_name": name,
+                   "change_pct": chg}
+        all_data[name] = record
+        all_rows.append((name, np_, cfg["unit"], ", ".join(cfg["stocks"]), chg, cfg["threshold"]))
 
     save_history(all_data)
     print(f"\n{'='*40}\n✅{ok} ❌{fail}")
 
-    if alerts or (weekly_items and today.weekday()==0):
-        lines = []
-        if alerts:
-            lines.append(f"## ⚠️ 告警 ({len(alerts)}项)")
+    # ── 生成推送内容 ──
+    lines = [f"## 📦 大宗商品 — {today:%Y.%m.%d}", "",
+             f"> {'周报' if is_monday else '日报'} ｜ 监控10品种→8框架股 ｜ {today:%m-%d %H:%M}", ""]
+
+    # 告警（如有）
+    if alerts:
+        lines.append("### ⚠️ 告警")
+        for a in alerts:
+            dd = "📈" if a["change_pct"]>0 else "📉"
+            lines.append(f"**{a['name']}** {dd} {a['change_pct']*100:+.1f}%")
+            lines.append(f"> 现价 {a['price']:,.0f} {a['unit']}（上次{a['old_price']:,.0f}）")
+            lines.append(f"> 影响：{', '.join(a['stocks'])}")
             lines.append("")
-            for a in alerts:
-                dd = "📈" if a["change_pct"]>0 else "📉"
-                lines.append(f"**{a['name']}** {dd} {a['change_pct']*100:+.1f}%")
-                lines.append(f"> 现价 {a['price']:,.0f} {a['unit']}")
-                lines.append(f"> 影响：{', '.join(a['stocks'])}")
-                lines.append("")
-        if weekly_items and today.weekday()==0:
-            lines.append("## 📋 周报")
-            lines.append("")
-            for it in weekly_items:
-                lines.append(f"**{it.get('_name','')}** {it['price']:,.0f} {it.get('unit','')}")
-                lines.append(f"> 影响：{it['stocks']}")
-                lines.append("")
-        lines.append(f"---\n{today.strftime('%Y-%m-%d %H:%M')} | ✅{ok} ❌{fail}")
-        pushplus_send("⚡ 告警" if alerts else "📋 周报", "\n".join(lines))
-    else:
-        print("无告警无周报")
+        lines.append("")
+
+    # 全品种价格表
+    lines.append("### 📋 全部品种")
+    lines.append("")
+    for name, price, unit, stocks, chg, threshold in all_rows:
+        if chg is not None:
+            arrow = "↑" if chg > 0 else "↓" if chg < 0 else "→"
+            flag = "🔴" if abs(chg) >= threshold else "⚪"
+            change_str = f"{flag} {arrow} {abs(chg)*100:.1f}%"
+        else:
+            change_str = "🆕 首次"
+        lines.append(f"**{name}** {price:,.0f} {unit} | {change_str}")
+        lines.append(f"> {stocks}")
+        lines.append("")
+
+    lines.append(f"---")
+    lines.append(f"✅{ok} ❌{fail} | {today:%Y-%m-%d %H:%M}")
+
+    title = f"⚡ 商品告警({len(alerts)}项)" if alerts else ("📦 商品周报" if is_monday else "📦 商品日报")
+    pushplus_send(title, "\n".join(lines))
 
     print("\n✅ 完成")
 
