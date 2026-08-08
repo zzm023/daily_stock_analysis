@@ -8,17 +8,18 @@ import os
 from datetime import datetime, timedelta, date as date_type
 
 DIV = {
-    "600036": {"name": "招商银行", "dps": 2.10, "anchor": 6.0},
-    "601601": {"name": "中国太保", "dps": 1.02, "anchor": 3.4},
-    "600018": {"name": "上港集团", "dps": 0.18, "anchor": 3.8},
+    "600036": {"name": "招商银行", "dps": 2.02, "anchor": 6.0},
+    "601601": {"name": "中国太保", "dps": 1.15, "anchor": 3.4},
+    "600018": {"name": "上港集团", "dps": 0.145, "anchor": 3.8},
     "601816": {"name": "京沪高铁", "dps": 0.095, "anchor": 2.5},
-    "600900": {"name": "长江电力", "dps": 0.85, "anchor": 4.0},
-    "600941": {"name": "中国移动", "dps": 5.35, "anchor": 5.5},
-    "600406": {"name": "国电南瑞", "dps": 0.25, "anchor": 1.3},
-    "600598": {"name": "北大荒",   "dps": 0.44, "anchor": 3.8},
-    "603568": {"name": "伟明环保", "dps": 0.50, "anchor": 3.4},
-    "600007": {"name": "中国国贸", "dps": 0.98, "anchor": 5.6},
-    "000429": {"name": "粤高速A",  "dps": 0.61, "anchor": 5.8},
+    "600900": {"name": "长江电力", "dps": 0.79, "anchor": 4.0},
+    "600941": {"name": "中国移动", "dps": 4.70, "anchor": 5.5},
+    "600406": {"name": "国电南瑞", "dps": 0.475, "anchor": 1.3},
+    "600598": {"name": "北大荒",   "dps": 0.55, "anchor": 3.8},
+    "603568": {"name": "伟明环保", "dps": 0.60, "anchor": 3.4},
+    "600007": {"name": "中国国贸", "dps": 1.07, "anchor": 5.6},
+    "000429": {"name": "粤高速A",  "dps": 0.604, "anchor": 5.8},
+    "002027": {"name": "分众传媒", "dps": 0.19,  "anchor": 5.8},
 }
 
 CUTOFF = (datetime.now() - timedelta(days=365)).date()
