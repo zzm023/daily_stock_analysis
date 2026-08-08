@@ -19,7 +19,7 @@ DIV = {
     "603568": {"name": "伟明环保", "dps": 0.60, "anchor": 3.4},
     "600007": {"name": "中国国贸", "dps": 1.07, "anchor": 5.6},
     "000429": {"name": "粤高速A",  "dps": 0.604, "anchor": 5.8},
-    "002027": {"name": "分众传媒", "dps": 0.19,  "anchor": 5.8},
+    "002027": {"name": "分众传媒", "dps": 0.19,  "anchor": 3.5},
 }
 
 CUTOFF = (datetime.now() - timedelta(days=365)).date()
