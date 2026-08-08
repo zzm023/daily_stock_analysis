@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-每周复盘：52只框架股票 PE / PB / 距触发价 汇总
+每周复盘：50只框架股票 PE / PB / 距触发价 汇总
 数据源：新浪财经 — 每周六 18:00
 """
 import requests
@@ -14,7 +14,7 @@ STOCKS = [
     {"code": "601601", "name": "中国太保",  "trigger": 30.00, "attr": "①永续债"},
     {"code": "600018", "name": "上港集团",  "trigger": 3.82,  "attr": "①永续债"},
     {"code": "601816", "name": "京沪高铁",  "trigger": 3.80,  "attr": "①永续债"},
-    {"code": "600900", "name": "长江电力",  "trigger": 19.75,  "attr": "①永续债", "anchor": "息率≥4%"},
+    {"code": "600900", "name": "长江电力",  "trigger": 19.75,  "attr": "①永续债"},
     {"code": "600941", "name": "中国移动",  "trigger": 85.45, "attr": "①永续债"},
     {"code": "600406", "name": "国电南瑞",  "trigger": 20.00, "attr": "①永续债"},
     {"code": "600598", "name": "北大荒",    "trigger": 11.50, "attr": "①永续债"},
