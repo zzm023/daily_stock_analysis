@@ -2,7 +2,7 @@
 """
 大宗商品价格监控 v8
 数据源：akshare期货 + 100ppi品种子站新闻列表
-每周一推送完整报告，每日仍有告警实时推送
+每周一推送完整报告，每日仍有告警实时推送，所有品种全部显示
 """
 
 import requests
@@ -202,16 +202,27 @@ def main():
     all_data, ok, fail = {}, 0, 0
 
     for name, cfg in COMMODITIES.items():
-        if not should_check_today(cfg):
-            all_data[name] = history.get(name, {})
+        do_fetch = should_check_today(cfg)
+        if not do_fetch:
+            cached = history.get(name, {})
+            if cached:
+                all_data[name] = cached
+                all_rows.append((name, cached.get("price",0), cfg["unit"],
+                                 ", ".join(cfg["stocks"]), cached.get("change_pct"), cfg["threshold"]))
             continue
+
         print(f"\n[{name}] ...")
         result = get_commodity_price(name, cfg)
         if result is None:
             print(f"  ❌ 失败")
             fail += 1
-            all_data[name] = history.get(name, {})
+            cached = history.get(name, {})
+            all_data[name] = cached
+            if cached:
+                all_rows.append((name, cached.get("price",0), cfg["unit"],
+                                 ", ".join(cfg["stocks"]), cached.get("change_pct"), cfg["threshold"]))
             continue
+
         ok += 1
         np_ = result["price"]
         old = history.get(name, {}).get("price")
@@ -235,11 +246,9 @@ def main():
     save_history(all_data)
     print(f"\n{'='*40}\n✅{ok} ❌{fail}")
 
-    # ── 生成推送内容 ──
     lines = [f"## 📦 大宗商品 — {today:%Y.%m.%d}", "",
              f"> {'周报' if is_monday else '日报'} ｜ 监控10品种→8框架股 ｜ {today:%m-%d %H:%M}", ""]
 
-    # 告警（如有）
     if alerts:
         lines.append("### ⚠️ 告警")
         for a in alerts:
@@ -250,7 +259,6 @@ def main():
             lines.append("")
         lines.append("")
 
-    # 全品种价格表
     lines.append("### 📋 全部品种")
     lines.append("")
     for name, price, unit, stocks, chg, threshold in all_rows:
@@ -259,7 +267,7 @@ def main():
             flag = "🔴" if abs(chg) >= threshold else "⚪"
             change_str = f"{flag} {arrow} {abs(chg)*100:.1f}%"
         else:
-            change_str = "🆕 首次"
+            change_str = "🆕"
         lines.append(f"**{name}** {price:,.0f} {unit} | {change_str}")
         lines.append(f"> {stocks}")
         lines.append("")
