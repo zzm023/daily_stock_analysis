@@ -23,12 +23,6 @@ COMMODITIES = {
         "unit": "元/吨", "threshold": 0.02,
         "ppi_sub": "mdi.100ppi.com",
     },
-    "纯MDI": {
-        "stocks": ["万华化学(600309)"], "level": "daily",
-        "unit": "元/吨", "threshold": 0.02,
-        "ppi_sub": "www.100ppi.com",
-        "title_filter": "纯MDI",
-    },
     "钛白粉(金红石型)": {
         "stocks": ["龙佰集团(002601)"], "level": "weekly",
         "unit": "元/吨", "threshold": 0.02,
@@ -106,7 +100,7 @@ def get_akshare_futures(code):
     return None
 
 
-def get_ppi_sub_price(subdomain, keyword, title_filter=None):
+def get_ppi_sub_price(subdomain, keyword):
     try:
         url = f"https://{subdomain}/news/list---1.html"
         resp = requests.get(url, headers=HEADERS, timeout=20)
@@ -119,11 +113,6 @@ def get_ppi_sub_price(subdomain, keyword, title_filter=None):
             for m in matches:
                 p = float(m)
                 if 100 < p < 10000000:
-                    if title_filter:
-                        idx = html.find(m)
-                        ctx = html[max(0,idx-500):idx+100]
-                        if title_filter not in ctx:
-                            continue
                     return {"price": p, "date": str(date.today()), "change_pct": None}
 
         pat2 = r'(\d{4,7}\.\d{2})\s*元/[吨公斤]'
@@ -134,8 +123,6 @@ def get_ppi_sub_price(subdomain, keyword, title_filter=None):
                 idx = html.find(m)
                 ctx = html[max(0,idx-300):idx+100]
                 if keyword in ctx or "基准价" in ctx or "报价" in ctx:
-                    if title_filter and title_filter not in ctx:
-                        continue
                     return {"price": p, "date": str(date.today()), "change_pct": None}
 
         print(f"    [子站] {subdomain} 页面已获取但未匹配价格")
@@ -152,8 +139,7 @@ def get_commodity_price(name, cfg):
             return result
     if "ppi_sub" in cfg:
         kw = name.split("(")[0]
-        tf = cfg.get("title_filter")
-        result = get_ppi_sub_price(cfg["ppi_sub"], kw, tf)
+        result = get_ppi_sub_price(cfg["ppi_sub"], kw)
         if result:
             print(f"    [100ppi子站] ✅")
             return result
@@ -247,7 +233,7 @@ def main():
     print(f"\n{'='*40}\n✅{ok} ❌{fail}")
 
     lines = [f"## 📦 大宗商品 — {today:%Y.%m.%d}", "",
-             f"> {'周报' if is_monday else '日报'} ｜ 监控10品种→8框架股 ｜ {today:%m-%d %H:%M}", ""]
+             f"> {'周报' if is_monday else '日报'} ｜ 监控9品种→8框架股 ｜ {today:%m-%d %H:%M}", ""]
 
     if alerts:
         lines.append("### ⚠️ 告警")
