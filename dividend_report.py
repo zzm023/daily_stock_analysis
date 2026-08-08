@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""股息率周报：自动拉分红（÷10校正）+ 现价（新浪）
+"""股息率周报：手动维护DPS + 现价（新浪）
 每周一 08:00 CST
 """
 import requests
@@ -46,35 +46,6 @@ def parse_date(v):
     return None
 
 
-def fetch_dps(code):
-    try:
-        import akshare as ak
-        df = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
-        if df is None or df.empty:
-            return None, "空"
-
-        total, found = 0.0, 0
-        for _, r in df.iterrows():
-            result = (parse_date(r.get("除权除息日")) or
-                      parse_date(r.get("股权登记日")) or
-                      parse_date(r.get("公告日期")))
-            if result is None:
-                continue
-            if result >= CUTOFF:
-                try:
-                    val = float(r.get("派息", 0) or 0)
-                    total += val / 10.0
-                    found += 1
-                except (ValueError, TypeError):
-                    pass
-
-        if found > 0 and total > 0:
-            return round(total, 3), f"12M({found}条)"
-        return None, f"12M无(共{len(df)}条)"
-    except Exception as e:
-        return None, str(e)[:60]
-
-
 def fetch_price(code):
     prefix = "sh" if code.startswith("6") else "sz"
     for attempt in range(3):
@@ -111,18 +82,8 @@ def main():
 
     rows = []
     for code, v in DIV.items():
-        dps, src = fetch_dps(code)
-        if code == "002027":
-            dps = v["dps"]
-            src = "手动校正"
-        if code == "600036":
-            dps = v["dps"]
-            src = "手动校正"
-        if code == "600036" and dps is not None:
-            print(f"  [OK] 招商银行DPS={dps} [{src}]")
-        if dps is None:
-            dps = v["dps"]
-            src = f"兜底({src})"
+        dps = v["dps"]
+        src = "手动维护"
         price = fetch_price(code)
         yld = (dps / price * 100) if price > 0 else 0
         gap = v["anchor"] - yld
@@ -131,7 +92,7 @@ def main():
 
     rows.sort(key=lambda x: -x[5])
     lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
-             f"> DPS：12M实派 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", ""]
+             f"> DPS：手动维护 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", ""]
 
     for name, code, price, dps, src, yld, anchor, gap in rows:
         trigger_price = round(dps / anchor * 100, 2) if dps and anchor else 0
