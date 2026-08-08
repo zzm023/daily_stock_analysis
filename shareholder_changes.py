@@ -164,8 +164,8 @@ def main():
              f"> 近7天 ｜ 标题+段落提取 ｜ {now:%m-%d %H:%M}", f"> 共{len(hits)}条", ""]
 
     for h in hits:
-        lines.append(f"### {h['name']}({h['code']}) ｜ {h['date']}")
-        lines.append(f"**{h['title']}**")
+        lines.append(f"**{h['name']}({h['code']})** ｜ {h['date']}")
+        lines.append(f"{h['title']}")
         lines.append(f"> {h['summary']}")
         lines.append("")
 
