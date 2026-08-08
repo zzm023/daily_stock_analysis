@@ -233,16 +233,21 @@ def main():
     if alerts or (weekly_items and today.weekday()==0):
         lines = []
         if alerts:
-            lines.append(f"## ⚠️ 告警 ({len(alerts)}项)\n| 商品 | 现价 | 变动 | 影响 |\n|---|---|---|---|")
+            lines.append(f"## ⚠️ 告警 ({len(alerts)}项)")
+            lines.append("")
             for a in alerts:
                 dd = "📈" if a["change_pct"]>0 else "📉"
-                lines.append(f"| {a['name']} | {a['price']:,.0f} | {dd} {a['change_pct']*100:+.1f}% | {', '.join(a['stocks'])} |")
-            lines.append("")
+                lines.append(f"**{a['name']}** {dd} {a['change_pct']*100:+.1f}%")
+                lines.append(f"> 现价 {a['price']:,.0f} {a['unit']}")
+                lines.append(f"> 影响：{', '.join(a['stocks'])}")
+                lines.append("")
         if weekly_items and today.weekday()==0:
-            lines.append("## 📋 周报\n| 商品 | 现价 | 影响 |\n|---|---|---|")
-            for it in weekly_items:
-                lines.append(f"| {it.get('_name','')} | {it['price']:,.0f} | {it['stocks']} |")
+            lines.append("## 📋 周报")
             lines.append("")
+            for it in weekly_items:
+                lines.append(f"**{it.get('_name','')}** {it['price']:,.0f} {it.get('unit','')}")
+                lines.append(f"> 影响：{it['stocks']}")
+                lines.append("")
         lines.append(f"---\n{today.strftime('%Y-%m-%d %H:%M')} | ✅{ok} ❌{fail}")
         pushplus_send("⚡ 告警" if alerts else "📋 周报", "\n".join(lines))
     else:
