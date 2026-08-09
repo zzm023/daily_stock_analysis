@@ -56,9 +56,12 @@ def main():
     hold = state.get("holdings", {})
     cash = hold.pop("cash", 0)
     trigger = state.get("trigger", {})
+    total_capital = state.get("meta", {}).get("total_capital", 400000)
+
+    total_pnl_total = state.get("meta", {}).get("total_pnl", 0)
 
     lines = [f"## ☀️ 持仓日报 — {now:%Y.%m.%d}", "",
-             f"> {now:%M} ｜ 总资本 60万", ""]
+             f"> {now:%M} ｜ 本金 {total_capital//10000}万 ｜ 盈利 +{total_pnl_total//10000 if total_pnl_total else '21'}万", ""]
 
     total_stock_value = 0
     total_pnl = 0
@@ -77,24 +80,39 @@ def main():
                 price = v.get("cost", 0)
             cost = v.get("cost", 0)
             shares = v.get("shares", 0)
-            pnl = (price - cost) / cost * 100 if cost else 0
-            stock_val = price * shares
-            total_stock_value += stock_val
-            total_pnl += (price - cost) * shares
+            note = v.get("note", "")
+            is_negative_cost = cost < 0
 
-            # 卖出目标（股息率恢复或PE回归）
+            if is_negative_cost:
+                # 负成本持有：用0等效成本显示盈亏
+                pnl = price * shares
+                stock_val = price * shares
+                total_stock_value += stock_val
+                total_pnl += pnl
+                emoji = "🟢"
+                lines.append(f"**{v.get('name', code)}** {emoji} [负成本]")
+                lines.append(f"> {shares}股 成本负 现价{price:.2f} 市值{stock_val:,.0f} 盈亏 +{pnl:,.0f}元")
+                lines.append(f"> 建仓 {v.get('date','')} | {note}")
+            else:
+                pnl_pct = (price - cost) / cost * 100 if cost else 0
+                stock_val = price * shares
+                total_stock_value += stock_val
+                total_pnl += (price - cost) * shares
+                emoji = "🟢" if pnl_pct > 5 else ("🟡" if pnl_pct > 0 else "🔴")
+                lines.append(f"**{v.get('name', code)}** {emoji}")
+                lines.append(f"> {shares}股 成本{cost} 现价{price:.2f} 市值{stock_val:,.0f} 盈亏{pnl_pct:+.1f}%")
+                lines.append(f"> 建仓 {v.get('date','')} | 盈亏 {((price-cost)*shares):+.0f}元")
+
+            # 卖出目标（股息率恢复）
             dps = trigger.get(code, {}).get("dps", 0)
             anchor = trigger.get(code, {}).get("anchor_pct", 0)
-            sell_target = round(dps / anchor * 100, 2) if dps and anchor else 0
-            sell_gap = (sell_target - price) / price * 100 if sell_target and price else 0
-
-            emoji = "🟢" if pnl > 5 else ("🟡" if pnl > 0 else "🔴")
-            lines.append(f"**{v.get('name', code)}** {emoji}")
-            lines.append(f"> {shares}股 成本{cost} 现价{price:.2f} 市值{stock_val:,.0f} 盈亏{pnl:+.1f}%")
-            if cost:
-                lines.append(f"> 建仓 {v.get('date','')} | 盈亏 {((price-cost)*shares):+.0f}元")
-            if sell_target:
+            if dps and anchor and not is_negative_cost:
+                sell_target = round(dps / anchor * 100, 2)
+                sell_gap = (sell_target - price) / price * 100 if price else 0
                 lines.append(f"> 🎯 收租目标价 {sell_target:.2f}（距{sell_gap:+.1f}%）")
+
+            if note:
+                lines.append(f"> 📌 {note}")
             lines.append("")
 
         lines.append(f"💰 现金 {cash:,.0f}元")
@@ -106,11 +124,15 @@ def main():
     hit = [(c, v) for c, v in trigger.items() if v.get("status") == "已触发"]
     close = [(c, v) for c, v in trigger.items() if v.get("status") == "接近"]
     if hit:
-        lines.append(f"\n### 🔴 已触发待操作 ({len(hit)}只)")
+        lines.append(f"\n### 🔴 已触发 ({len(hit)}只)")
         for c, v in hit:
             lines.append(f"- {v['name']} 现价{v.get('current_price',0):.2f} 触发价{v['trigger_price']:.2f}")
 
-    # events today
+    if close:
+        lines.append(f"\n### 🟡 接近触发 ({len(close)}只)")
+        for c, v in close:
+            lines.append(f"- {v['name']} 现价{v.get('current_price',0):.2f} 触发价{v['trigger_price']:.2f}")
+
     events = state.get("events", [])
     if events:
         lines.append(f"\n### 📢 今日事件")
