@@ -104,9 +104,7 @@ def main():
         rows.append((v["name"], code, price, trigger_price, dps, yld, anchor, gap))
         print(f"  {v['name']}: DPS={dps:.3f} 价={price:.2f} 息率={yld:.2f}%")
 
-        # 更新触发价到状态文件（用股息率反推的更精确）
-        trigger[code]["trigger_price"] = trigger_price
-        trigger[code]["anchor_pct"] = anchor
+        # 不覆盖触发价，只写事件到 dividend_events
 
         # 记录股息事件
         if gap <= 0:
