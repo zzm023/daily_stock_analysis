@@ -2,19 +2,19 @@
 """
 增减持+质押+解禁监控 v2
 联动触发清单：只监控已触发/接近的股票
-数据源：东财公告API ｜ 写事件到 framework_state.json
+数据源：东财公告API ｜ 写事件到 framework_state.json ｜ 自动提交
 每周一 08:30 CST
 """
 import requests
 import os
 import re
 import json
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
 STATE_FILE = Path(__file__).parent / "framework_state.json"
 
-# 全量股票映射（只在触发清单里的才监控）
 ALL_STOCKS = {
     "600036":"招商银行","601601":"中国太保","600018":"上港集团","601816":"京沪高铁",
     "600900":"长江电力","600941":"中国移动","600406":"国电南瑞","600598":"北大荒",
@@ -149,6 +149,20 @@ def push(title, content):
         print(f"[PushPlus] {e}")
 
 
+def git_commit_state():
+    try:
+        subprocess.run(["git", "config", "user.name", "GitHub Action"], check=True)
+        subprocess.run(["git", "config", "user.email", "action@github.com"], check=True)
+        subprocess.run(["git", "add", "framework_state.json"], check=True)
+        result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
+        if result.returncode != 0:
+            subprocess.run(["git", "commit", "-m", "[auto] 更新增减持事件"], check=True)
+            subprocess.run(["git", "push"], check=True)
+            print("[GIT] framework_state.json 已提交")
+    except Exception as e:
+        print(f"[GIT] 提交失败: {e}")
+
+
 def main():
     now = datetime.now()
     print(f"[START] 增减持监控 v2 {now:%Y-%m-%d %H:%M}")
@@ -156,7 +170,6 @@ def main():
     state = load_state()
     trigger = state.get("trigger", {})
 
-    # ── 只扫描触发/接近的股票 ──
     active_codes = {c for c, v in trigger.items() if v.get("status") in ("已触发","接近")}
     print(f"  触发清单: {len(active_codes)} 只")
 
@@ -180,7 +193,6 @@ def main():
                 continue
             summary = extract_summary(text, title)
             if summary:
-                # 评级
                 if "增持" in summary or "增持" in title:
                     impact = "利好"
                 elif "减持" in summary:
@@ -194,7 +206,6 @@ def main():
                 matched += 1
         print(f"  {name}: {len(anns)}条/命中{matched}")
 
-    # ── 写事件到状态文件 ──
     events = []
     for h in hits:
         events.append({
@@ -209,23 +220,21 @@ def main():
     state["events"] = events
     save_state(state)
 
-    # ── 块状推送 ──
     if not hits:
         print("[INFO] 近7天无触发清单相关公告")
         push(f"📢 增减持 {now:%Y.%m.%d}", f"## 📢 增减持 — {now:%Y.%m.%d}\n\n触發清单股票近7天无增减持/质押/解禁公告。\n\n---\n{now:%H:%M}")
-        return
+    else:
+        hits.sort(key=lambda x: x["date"], reverse=True)
+        lines = [f"## 📢 增减持联动 — {now:%Y.%m.%d}", "",
+                 f"> 只监控触发清单 ｜ 近7天 ｜ 共{len(hits)}条", ""]
+        for h in hits:
+            lines.append(f"**{h['name']}({h['code']})** ｜ {h['date']} ｜ {h['impact']}")
+            lines.append(f"{h['title']}")
+            lines.append(f"> {h['summary']}")
+            lines.append("")
+        push(f"📢 增减持 {now:%Y.%m.%d}（{len(hits)}条）", "\n".join(lines))
 
-    hits.sort(key=lambda x: x["date"], reverse=True)
-    lines = [f"## 📢 增减持联动 — {now:%Y.%m.%d}", "",
-             f"> 只监控触发清单 ｜ 近7天 ｜ 共{len(hits)}条", ""]
-
-    for h in hits:
-        lines.append(f"**{h['name']}({h['code']})** ｜ {h['date']} ｜ {h['impact']}")
-        lines.append(f"{h['title']}")
-        lines.append(f"> {h['summary']}")
-        lines.append("")
-
-    push(f"📢 增减持 {now:%Y.%m.%d}（{len(hits)}条）", "\n".join(lines))
+    git_commit_state()
     print(f"[DONE] {len(hits)}条命中")
 
 
