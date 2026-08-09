@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-08-09T14:06:12",
+    "updated": "2026-08-09T14:21:14",
     "total_capital": 600000
   },
   "trigger": {
@@ -10,17 +10,17 @@
       "anchor_pct": 5.5,
       "dps": 2.02,
       "current_price": 38.8,
-      "gap_pct": 5.64,
-      "status": "接近"
+      "gap_pct": 15.24,
+      "status": "远离"
     },
     "601601": {
       "name": "中国太保",
-      "trigger_price": 30.00,
+      "trigger_price": 30.0,
       "anchor_pct": 3.4,
       "dps": 1.15,
       "current_price": 31.47,
-      "gap_pct": -6.95,
-      "status": "已触发"
+      "gap_pct": 4.9,
+      "status": "接近"
     },
     "600018": {
       "name": "上港集团",
@@ -69,21 +69,21 @@
     },
     "600598": {
       "name": "北大荒",
-      "trigger_price": 11.50,
+      "trigger_price": 11.5,
       "anchor_pct": 3.8,
       "dps": 0.55,
       "current_price": 12.06,
-      "gap_pct": -16.66,
-      "status": "已触发"
+      "gap_pct": 4.87,
+      "status": "接近"
     },
     "603568": {
       "name": "伟明环保",
-      "trigger_price": 14.50,
+      "trigger_price": 14.5,
       "anchor_pct": 3.4,
       "dps": 0.6,
       "current_price": 15.41,
-      "gap_pct": -12.69,
-      "status": "已触发"
+      "gap_pct": 6.28,
+      "status": "接近"
     },
     "600007": {
       "name": "中国国贸",
@@ -109,7 +109,7 @@
       "anchor_pct": 3.5,
       "dps": 0.19,
       "current_price": 5.14,
-      "gap_pct": -5.34,
+      "gap_pct": -2.28,
       "status": "已触发"
     },
     "000651": {
