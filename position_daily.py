@@ -84,8 +84,8 @@ def main():
             is_negative_cost = cost < 0
 
             if is_negative_cost:
-                # 负成本持有：用0等效成本显示盈亏
-                pnl = price * shares
+                # 负成本持有：(现价 - 负成本) × 股数
+                pnl = (price - cost) * shares
                 stock_val = price * shares
                 total_stock_value += stock_val
                 total_pnl += pnl
