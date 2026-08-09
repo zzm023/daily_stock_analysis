@@ -4,7 +4,7 @@
     "total_capital": 600000
   },
   "trigger": {
-    "600036": {"name":"招商银行","trigger_price":45.58,"anchor_pct":5.5,"dps":2.02,"current_price":0,"gap_pct":99,"status":"远离"},
+    "600036": {"name":"招商银行","trigger_price":33.67,"anchor_pct":5.5,"dps":2.02,"current_price":0,"gap_pct":99,"status":"远离"},
     "601601": {"name":"中国太保","trigger_price":30.00,"anchor_pct":3.4,"dps":1.15,"current_price":0,"gap_pct":99,"status":"远离"},
     "600018": {"name":"上港集团","trigger_price":4.00,"anchor_pct":4.5,"dps":0.145,"current_price":0,"gap_pct":99,"status":"远离"},
     "601816": {"name":"京沪高铁","trigger_price":4.20,"anchor_pct":3.0,"dps":0.095,"current_price":0,"gap_pct":99,"status":"远离"},
