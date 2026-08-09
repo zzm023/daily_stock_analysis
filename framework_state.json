@@ -6,7 +6,7 @@
   "trigger": {
     "600036": {
       "name": "招商银行",
-      "trigger_price": 36.73,
+      "trigger_price": 33.67,
       "anchor_pct": 5.5,
       "dps": 2.02,
       "current_price": 38.8,
@@ -15,7 +15,7 @@
     },
     "601601": {
       "name": "中国太保",
-      "trigger_price": 33.82,
+      "trigger_price": 30.00,
       "anchor_pct": 3.4,
       "dps": 1.15,
       "current_price": 31.47,
@@ -69,7 +69,7 @@
     },
     "600598": {
       "name": "北大荒",
-      "trigger_price": 14.47,
+      "trigger_price": 11.50,
       "anchor_pct": 3.8,
       "dps": 0.55,
       "current_price": 12.06,
@@ -78,7 +78,7 @@
     },
     "603568": {
       "name": "伟明环保",
-      "trigger_price": 17.65,
+      "trigger_price": 14.50,
       "anchor_pct": 3.4,
       "dps": 0.6,
       "current_price": 15.41,
@@ -105,7 +105,7 @@
     },
     "002027": {
       "name": "分众传媒",
-      "trigger_price": 5.43,
+      "trigger_price": 5.26,
       "anchor_pct": 3.5,
       "dps": 0.19,
       "current_price": 5.14,
