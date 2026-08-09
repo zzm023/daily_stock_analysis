@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
-"""增减持+质押+解禁监控：标题命中→PDF提取→段落精准匹配
-每周一 08:30 CST ｜ 数据源：东财公告API
+"""
+增减持+质押+解禁监控 v2
+联动触发清单：只监控已触发/接近的股票
+数据源：东财公告API ｜ 写事件到 framework_state.json
+每周一 08:30 CST
 """
 import requests
 import os
 import re
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
-STOCKS = [
-    ("600036","招商银行"),("601601","中国太保"),("600018","上港集团"),("601816","京沪高铁"),
-    ("600900","长江电力"),("600941","中国移动"),("600406","国电南瑞"),("600598","北大荒"),
-    ("603568","伟明环保"),("600007","中国国贸"),("000429","粤高速A"),("000157","中联重科"),
-    ("600585","海螺水泥"),("000792","盐湖股份"),("600188","兖矿能源"),("002601","龙佰集团"),
-    ("600299","安迪苏"),("300498","温氏股份"),("000651","格力电器"),("600066","宇通客车"),
-    ("000333","美的集团"),("600690","海尔智家"), ("600031","三一重工"),("600309","万华化学"),
-    ("600660","福耀玻璃"),("600761","安徽合力"),("600486","扬农化工"),("601058","赛轮轮胎"),
-    ("603806","福斯特"),("000708","中信特钢"),("002027","分众传媒"),("000538","云南白药"),
-    ("603605","珀莱雅"),("605098","行动教育"),("600298","安琪酵母"),("300628","亿联网络"),
-    ("002508","老板电器"),("002032","苏泊尔"),("002884","凌霄泵业"),("002318","久立特材"),
-    ("603855","华荣股份"),("603288","海天味业"),("603508","思维列控"),("600161","天坛生物"),
-    ("300832","新产业"),("688187","时代电气"),("300124","汇川技术"),("002837","英维克"),
-    ("300627","华测导航"),("002410","广联达"),
-]
+STATE_FILE = Path(__file__).parent / "framework_state.json"
+
+# 全量股票映射（只在触发清单里的才监控）
+ALL_STOCKS = {
+    "600036":"招商银行","601601":"中国太保","600018":"上港集团","601816":"京沪高铁",
+    "600900":"长江电力","600941":"中国移动","600406":"国电南瑞","600598":"北大荒",
+    "603568":"伟明环保","600007":"中国国贸","000429":"粤高速A","000157":"中联重科",
+    "600585":"海螺水泥","000792":"盐湖股份","600188":"兖矿能源","002601":"龙佰集团",
+    "600299":"安迪苏","300498":"温氏股份","000651":"格力电器","600066":"宇通客车",
+    "000333":"美的集团","600690":"海尔智家","600031":"三一重工","600309":"万华化学",
+    "600660":"福耀玻璃","600761":"安徽合力","600486":"扬农化工","601058":"赛轮轮胎",
+    "603806":"福斯特","000708":"中信特钢","002027":"分众传媒","000538":"云南白药",
+    "603605":"珀莱雅","605098":"行动教育","600298":"安琪酵母","300628":"亿联网络",
+    "002508":"老板电器","002032":"苏泊尔","002884":"凌霄泵业","002318":"久立特材",
+    "603855":"华荣股份","603288":"海天味业","603508":"思维列控","600161":"天坛生物",
+    "300832":"新产业","688187":"时代电气","300124":"汇川技术","002837":"英维克",
+    "300627":"华测导航","002410":"广联达",
+}
 
 KEYWORDS = [
     "减持", "增持", "质押", "解禁", "解除质押", "补充质押",
@@ -29,9 +37,25 @@ KEYWORDS = [
     "要约收购", "集中竞价", "可交债", "EB换股",
 ]
 
+PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
+PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
+
+
+def load_state():
+    if STATE_FILE.exists():
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"trigger": {}, "holdings": {}, "events": []}
+
+
+def save_state(s):
+    s["meta"] = s.get("meta", {})
+    s["meta"]["updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(s, f, ensure_ascii=False, indent=2)
+
 
 def fetch_anns(code):
-    """东财公告API：近7天"""
     now = datetime.now()
     start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
     end = now.strftime("%Y-%m-%d")
@@ -85,7 +109,6 @@ def clean(text):
 
 
 def extract_summary(text, title=""):
-    """从含关键词的段落提取数字"""
     raw = clean(text)
     paragraphs = [p.strip() for p in re.split(r'\n\s*\n|\n{2,}', raw) if len(p.strip()) > 20]
 
@@ -114,23 +137,32 @@ def extract_summary(text, title=""):
 
 
 def push(title, content):
-    token = os.getenv("PUSHPLUS_TOKEN")
-    topic = os.getenv("PUSHPLUS_TOPIC")
-    if not token:
+    if not PUSHPLUS_TOKEN:
         print("[WARN] 无TOKEN"); return
-    payload = {"token": token, "title": title, "content": content, "template": "markdown"}
-    if topic:
-        payload["topic"] = topic
-    r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
-    print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
+    try:
+        payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
+        if PUSHPLUS_TOPIC:
+            payload["topic"] = PUSHPLUS_TOPIC
+        r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
+        print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
+    except Exception as e:
+        print(f"[PushPlus] {e}")
 
 
 def main():
     now = datetime.now()
-    print(f"[START] 增减持监控 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 增减持监控 v2 {now:%Y-%m-%d %H:%M}")
+
+    state = load_state()
+    trigger = state.get("trigger", {})
+
+    # ── 只扫描触发/接近的股票 ──
+    active_codes = {c for c, v in trigger.items() if v.get("status") in ("已触发","接近")}
+    print(f"  触发清单: {len(active_codes)} 只")
 
     hits = []
-    for code, name in STOCKS:
+    for code in active_codes:
+        name = ALL_STOCKS.get(code, code)
         anns = fetch_anns(code)
         if not anns:
             continue
@@ -148,23 +180,47 @@ def main():
                 continue
             summary = extract_summary(text, title)
             if summary:
-                print(f"  🔥 {name} {notice_date} → {summary}")
+                # 评级
+                if "增持" in summary or "增持" in title:
+                    impact = "利好"
+                elif "减持" in summary:
+                    impact = "利空" if any(x in summary for x in ["5%","大股东","实控人"]) else "轻微"
+                else:
+                    impact = "关注"
+
+                print(f"  🔥 {name} {notice_date} → {summary} [{impact}]")
                 hits.append({"name": name, "code": code, "date": notice_date,
-                             "title": title, "summary": summary})
+                             "title": title, "summary": summary, "impact": impact})
                 matched += 1
         print(f"  {name}: {len(anns)}条/命中{matched}")
 
+    # ── 写事件到状态文件 ──
+    events = []
+    for h in hits:
+        events.append({
+            "type": "增减持",
+            "code": h["code"],
+            "name": h["name"],
+            "date": h["date"],
+            "title": h["title"],
+            "summary": h["summary"],
+            "impact": h["impact"]
+        })
+    state["events"] = events
+    save_state(state)
+
+    # ── 块状推送 ──
     if not hits:
-        print("[INFO] 近7天无相关公告")
-        push(f"📢 增减持 {now:%Y.%m.%d}", "近7天无增减持/质押/解禁相关公告。")
+        print("[INFO] 近7天无触发清单相关公告")
+        push(f"📢 增减持 {now:%Y.%m.%d}", f"## 📢 增减持 — {now:%Y.%m.%d}\n\n触發清单股票近7天无增减持/质押/解禁公告。\n\n---\n{now:%H:%M}")
         return
 
     hits.sort(key=lambda x: x["date"], reverse=True)
-    lines = [f"## 📢 增减持+质押+解禁 — {now:%Y.%m.%d}", "",
-             f"> 近7天 ｜ 标题+段落提取 ｜ {now:%m-%d %H:%M}", f"> 共{len(hits)}条", ""]
+    lines = [f"## 📢 增减持联动 — {now:%Y.%m.%d}", "",
+             f"> 只监控触发清单 ｜ 近7天 ｜ 共{len(hits)}条", ""]
 
     for h in hits:
-        lines.append(f"**{h['name']}({h['code']})** ｜ {h['date']}")
+        lines.append(f"**{h['name']}({h['code']})** ｜ {h['date']} ｜ {h['impact']}")
         lines.append(f"{h['title']}")
         lines.append(f"> {h['summary']}")
         lines.append("")
