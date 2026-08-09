@@ -127,7 +127,7 @@ def main():
     content += f"> 触发{len([v for v in trigger.values() if v.get('status') in ('已触发','接近')])}只 | 事件{len(state.get('events',[]))}条\n\n"
     content += "### 🤖 分析结论\n\n"
     content += analysis
-    content += f"\n\n---\n{now:%H:%M} | DeepSeek V3"
+    content += f"\n\n---\n{now:%H:%M} | DeepSeek API"
 
     push(f"📊 每日信号 {now:%Y.%m.%d}", content)
 
