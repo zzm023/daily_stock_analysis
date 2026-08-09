@@ -1,12 +1,12 @@
 {
   "meta": {
-    "updated": "2026-08-09T13:19:33",
+    "updated": "2026-08-09T13:41:28",
     "total_capital": 600000
   },
   "trigger": {
     "600036": {
       "name": "招商银行",
-      "trigger_price": 33.67,
+      "trigger_price": 36.73,
       "anchor_pct": 5.5,
       "dps": 2.02,
       "current_price": 38.8,
@@ -15,7 +15,7 @@
     },
     "601601": {
       "name": "中国太保",
-      "trigger_price": 30.0,
+      "trigger_price": 33.82,
       "anchor_pct": 3.4,
       "dps": 1.15,
       "current_price": 31.47,
@@ -24,7 +24,7 @@
     },
     "600018": {
       "name": "上港集团",
-      "trigger_price": 4.0,
+      "trigger_price": 3.22,
       "anchor_pct": 4.5,
       "dps": 0.145,
       "current_price": 5.16,
@@ -33,7 +33,7 @@
     },
     "601816": {
       "name": "京沪高铁",
-      "trigger_price": 4.2,
+      "trigger_price": 3.17,
       "anchor_pct": 3.0,
       "dps": 0.095,
       "current_price": 5.04,
@@ -42,7 +42,7 @@
     },
     "600900": {
       "name": "长江电力",
-      "trigger_price": 21.67,
+      "trigger_price": 17.56,
       "anchor_pct": 4.5,
       "dps": 0.79,
       "current_price": 27.75,
@@ -51,7 +51,7 @@
     },
     "600941": {
       "name": "中国移动",
-      "trigger_price": 85.53,
+      "trigger_price": 85.45,
       "anchor_pct": 5.5,
       "dps": 4.7,
       "current_price": 95.5,
@@ -69,7 +69,7 @@
     },
     "600598": {
       "name": "北大荒",
-      "trigger_price": 11.5,
+      "trigger_price": 14.47,
       "anchor_pct": 3.8,
       "dps": 0.55,
       "current_price": 12.06,
@@ -78,7 +78,7 @@
     },
     "603568": {
       "name": "伟明环保",
-      "trigger_price": 14.5,
+      "trigger_price": 17.65,
       "anchor_pct": 3.4,
       "dps": 0.6,
       "current_price": 15.41,
@@ -105,7 +105,7 @@
     },
     "002027": {
       "name": "分众传媒",
-      "trigger_price": 5.26,
+      "trigger_price": 5.43,
       "anchor_pct": 3.5,
       "dps": 0.19,
       "current_price": 5.14,
@@ -450,6 +450,57 @@
   "events": [],
   "events_daily": [],
   "commodity_events": [],
-  "dividend_events": [],
+  "dividend_events": [
+    {
+      "code": "600036",
+      "name": "招商银行",
+      "price": 38.8,
+      "yld": 5.21,
+      "anchor": 5.5,
+      "trigger_price": 36.73,
+      "status": "接近",
+      "excess_pp": 0.29
+    },
+    {
+      "code": "601601",
+      "name": "中国太保",
+      "price": 31.47,
+      "yld": 3.65,
+      "anchor": 3.4,
+      "trigger_price": 33.82,
+      "status": "已触发",
+      "excess_pp": 0.25
+    },
+    {
+      "code": "600598",
+      "name": "北大荒",
+      "price": 12.06,
+      "yld": 4.56,
+      "anchor": 3.8,
+      "trigger_price": 14.47,
+      "status": "已触发",
+      "excess_pp": 0.76
+    },
+    {
+      "code": "603568",
+      "name": "伟明环保",
+      "price": 15.41,
+      "yld": 3.89,
+      "anchor": 3.4,
+      "trigger_price": 17.65,
+      "status": "已触发",
+      "excess_pp": 0.49
+    },
+    {
+      "code": "002027",
+      "name": "分众传媒",
+      "price": 5.14,
+      "yld": 3.7,
+      "anchor": 3.5,
+      "trigger_price": 5.43,
+      "status": "已触发",
+      "excess_pp": 0.2
+    }
+  ],
   "earnings_events": []
 }
