@@ -91,7 +91,7 @@ def main():
                 total_pnl += pnl
                 emoji = "🟢"
                 lines.append(f"**{v.get('name', code)}** {emoji} [负成本]")
-                lines.append(f"> {shares}股 成本负 现价{price:.2f} 市值{stock_val:,.0f} 盈亏 +{pnl:,.0f}元（含已实现）
+                lines.append(f"> {shares}股 成本负 现价{price:.2f} 市值{stock_val:,.0f} 盈亏 +{pnl:,.0f}元（含已实现）")
                 lines.append(f"> 建仓 {v.get('date','')} | {note}")
             else:
                 pnl_pct = (price - cost) / cost * 100 if cost else 0
