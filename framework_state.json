@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-08-09T13:41:28",
+    "updated": "2026-08-09T14:06:12",
     "total_capital": 600000
   },
   "trigger": {
@@ -10,8 +10,8 @@
       "anchor_pct": 5.5,
       "dps": 2.02,
       "current_price": 38.8,
-      "gap_pct": 15.24,
-      "status": "远离"
+      "gap_pct": 5.64,
+      "status": "接近"
     },
     "601601": {
       "name": "中国太保",
@@ -19,8 +19,8 @@
       "anchor_pct": 3.4,
       "dps": 1.15,
       "current_price": 31.47,
-      "gap_pct": 4.9,
-      "status": "接近"
+      "gap_pct": -6.95,
+      "status": "已触发"
     },
     "600018": {
       "name": "上港集团",
@@ -28,7 +28,7 @@
       "anchor_pct": 4.5,
       "dps": 0.145,
       "current_price": 5.16,
-      "gap_pct": 29.0,
+      "gap_pct": 60.25,
       "status": "远离"
     },
     "601816": {
@@ -37,7 +37,7 @@
       "anchor_pct": 3.0,
       "dps": 0.095,
       "current_price": 5.04,
-      "gap_pct": 20.0,
+      "gap_pct": 58.99,
       "status": "远离"
     },
     "600900": {
@@ -46,7 +46,7 @@
       "anchor_pct": 4.5,
       "dps": 0.79,
       "current_price": 27.75,
-      "gap_pct": 28.06,
+      "gap_pct": 58.03,
       "status": "远离"
     },
     "600941": {
@@ -55,7 +55,7 @@
       "anchor_pct": 5.5,
       "dps": 4.7,
       "current_price": 95.5,
-      "gap_pct": 11.66,
+      "gap_pct": 11.76,
       "status": "远离"
     },
     "600406": {
@@ -73,8 +73,8 @@
       "anchor_pct": 3.8,
       "dps": 0.55,
       "current_price": 12.06,
-      "gap_pct": 4.87,
-      "status": "接近"
+      "gap_pct": -16.66,
+      "status": "已触发"
     },
     "603568": {
       "name": "伟明环保",
@@ -82,8 +82,8 @@
       "anchor_pct": 3.4,
       "dps": 0.6,
       "current_price": 15.41,
-      "gap_pct": 6.28,
-      "status": "接近"
+      "gap_pct": -12.69,
+      "status": "已触发"
     },
     "600007": {
       "name": "中国国贸",
@@ -109,7 +109,7 @@
       "anchor_pct": 3.5,
       "dps": 0.19,
       "current_price": 5.14,
-      "gap_pct": -2.28,
+      "gap_pct": -5.34,
       "status": "已触发"
     },
     "000651": {
