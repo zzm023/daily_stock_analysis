@@ -2,20 +2,20 @@
 """
 大宗商品价格监控 v9
 联动触发清单：异动时标注是否影响触发清单股票
-数据源：akshare期货 + 100ppi品种子站新闻列表
+数据源：akshare期货 + 100ppi品种子站 ｜ 自动提交状态文件
 每日推送，所有品种显示
 """
 import requests
 import json
 import os
 import re
+import subprocess
 from datetime import datetime, date
 from pathlib import Path
 
 STATE_FILE = Path(__file__).parent / "framework_state.json"
 DATA_FILE = Path(__file__).parent / "commodity_prices.json"
 
-# 商品 -> 股票代码（用于映射触发清单）
 COMMODITY_STOCK_MAP = {
     "碳酸锂":    ["000792"],
     "聚合MDI":   ["600309"],
@@ -106,6 +106,20 @@ def save_state(s):
         json.dump(s, f, ensure_ascii=False, indent=2)
 
 
+def git_commit_state():
+    try:
+        subprocess.run(["git", "config", "user.name", "GitHub Action"], check=True)
+        subprocess.run(["git", "config", "user.email", "action@github.com"], check=True)
+        subprocess.run(["git", "add", "framework_state.json"], check=True)
+        result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
+        if result.returncode != 0:
+            subprocess.run(["git", "commit", "-m", "[auto] 更新商品事件"], check=True)
+            subprocess.run(["git", "push"], check=True)
+            print("[GIT] framework_state.json 已提交")
+    except Exception as e:
+        print(f"[GIT] 提交失败: {e}")
+
+
 def get_akshare_futures(code):
     try:
         import akshare as ak
@@ -191,7 +205,8 @@ def save_history(data):
 
 
 def push(title, content):
-    if not PUSHPLUS_TOKEN: return
+    if not PUSHPLUS_TOKEN:
+        return
     try:
         payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
         if PUSHPLUS_TOPIC:
@@ -217,7 +232,6 @@ def main():
     state = load_state()
     trigger = state.get("trigger", {})
 
-    # 触发清单的股票代码集合
     trigger_codes = {c for c, v in trigger.items() if v.get("status") in ("已触发","接近")}
     print(f"  触发清单: {len(trigger_codes)} 只 → {[STOCK_NAMES.get(c,c) for c in trigger_codes]}")
 
@@ -256,7 +270,6 @@ def main():
             d = "↑" if chg>0 else "↓" if chg<0 else "→"
             print(f"  ✅ {np_:,.0f} {cfg['unit']} | {d} {abs(chg)*100:.1f}%")
             if abs(chg) >= cfg["threshold"]:
-                # 检查影响触发清单吗
                 affected_codes = COMMODITY_STOCK_MAP.get(name, [])
                 in_trigger = [c for c in affected_codes if c in trigger_codes]
                 alerts.append({
@@ -264,7 +277,6 @@ def main():
                     "stocks":cfg["stocks"],"unit":cfg["unit"],
                     "in_trigger": in_trigger
                 })
-                # 写事件
                 commodity_events.append({
                     "commodity": name,
                     "price": np_,
@@ -283,14 +295,12 @@ def main():
         all_data[name] = record
         all_rows.append((name, np_, cfg["unit"], ", ".join(cfg["stocks"]), chg, cfg["threshold"]))
 
-    # ── 写事件到状态文件 ──
     state["commodity_events"] = commodity_events
     save_state(state)
     save_history(all_data)
 
     print(f"\n{'='*40}\n✅{ok} ❌{fail}")
 
-    # ── 块状推送 ──
     lines = [f"## 📦 大宗商品 — {today:%Y.%m.%d}", "",
              f"> {'周报' if is_monday else '日报'} ｜ 监控9品种 ｜ {today:%m-%d %H:%M}", ""]
 
@@ -311,7 +321,6 @@ def main():
     lines.append("### 📋 全部品种")
     lines.append("")
     for name, price, unit, stocks, chg, threshold in all_rows:
-        # 检查该品种是否影响触发清单
         affected = COMMODITY_STOCK_MAP.get(name, [])
         hit_trigger = [c for c in affected if c in trigger_codes]
         tag = " 🔴清单" if hit_trigger else ""
@@ -332,6 +341,7 @@ def main():
     title = f"⚡ 商品异动({len(alerts)}项)" if alerts else ("📦 商品周报" if is_monday else "📦 商品日报")
     push(title, "\n".join(lines))
 
+    git_commit_state()
     print("\n✅ 完成")
 
 
