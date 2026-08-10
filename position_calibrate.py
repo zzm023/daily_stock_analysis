@@ -1,6 +1,6 @@
 """
-仓位校准器 v2
-修复：- 列表强制 pushplus 分行
+仓位校准器 v3
+动态总资产 = 市值 + 现金
 """
 import os, json, requests, re
 from datetime import datetime
@@ -76,13 +76,13 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 仓位校准 v2 {now:%Y-%m-%d}")
+    print(f"[START] 仓位校准 v3 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
 
     hold = state.get("holdings", {})
-    total_capital = state.get("meta", {}).get("total_capital", 600000)
+    cash = hold.get("cash", 0)
     hold_codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
     prices = batch_prices(hold_codes)
 
@@ -102,16 +102,14 @@ def main():
         attr_stocks.setdefault(a, []).append(f"{name} {mv/10000:.1f}万")
 
     total_mv = sum(attr_mv.values())
+    total_capital = total_mv + cash  # ← 动态总资产
 
     lines = [
         f"仓位校准 {now:%m}.{now:%d}",
-        f"资金{total_capital/10000:.0f}万 | 持仓{total_mv/10000:.0f}万 | 仓位{total_mv/total_capital*100:.0f}%",
+        f"总{total_capital/10000:.0f}万 | 仓{total_mv/10000:.0f}万 | {total_mv/total_capital*100:.0f}%",
     ]
 
-    over = []
-    empty = []
-    ok = []
-
+    over, empty, ok = [], [], []
     for a, cap_pct in sorted(CAPS.items(), key=lambda x: x[1], reverse=True):
         cap = total_capital * cap_pct
         used = attr_mv.get(a, 0)
@@ -129,18 +127,9 @@ def main():
             for s in attr_stocks.get(a, []):
                 ok.append(f"    - {s}")
 
-    if over:
-        lines.append("")
-        lines.append("超限")
-        lines.extend(over)
-    if empty:
-        lines.append("")
-        lines.append("空缺")
-        lines.extend(empty)
-    if ok:
-        lines.append("")
-        lines.append("正常")
-        lines.extend(ok)
+    if over: lines.append(""); lines.append("超限"); lines.extend(over)
+    if empty: lines.append(""); lines.append("空缺"); lines.extend(empty)
+    if ok: lines.append(""); lines.append("正常"); lines.extend(ok)
     lines.append("")
 
     push(f"仓位校准 {now:%m}.{now:%d}", "\n".join(lines))
