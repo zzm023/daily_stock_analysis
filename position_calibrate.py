@@ -102,7 +102,7 @@ def main():
         attr_stocks.setdefault(a, []).append(f"{name} {mv/10000:.1f}万")
 
     total_mv = sum(attr_mv.values())
-    total_capital = total_mv + cash  # ← 动态总资产
+    total_capital = total_mv + cash
 
     lines = [
         f"仓位校准 {now:%m}.{now:%d}",
