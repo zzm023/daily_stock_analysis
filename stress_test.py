@@ -1,6 +1,6 @@
 """
-压力测试 v1
-假设大盘跌 20%/30%/40%，持仓亏多少？哪类属性最脆？
+压力测试 v2
+修复：亏损从大到小排列 / 每行一个属性
 """
 import os, json, requests, re
 from datetime import datetime
@@ -34,15 +34,13 @@ ATTR = {
     "002747":"科技⚠","600161":"科技⚠",
 }
 
-# 各属性 β 系数（相对大盘的波动倍率）
 BETA = {
-    "①永续债": 0.6, "②高息成长": 0.8,
-    "③周期拐点": 1.4, "④全球寡头": 1.0,
-    "⑤品牌心智": 0.9, "⑥小众冠军": 1.1,
-    "科技⚠": 1.5, "未分类": 1.0,
+    "①永续债":0.6,"②高息成长":0.8,"③周期拐点":1.4,
+    "④全球寡头":1.0,"⑤品牌心智":0.9,"⑥小众冠军":1.1,
+    "科技⚠":1.5,"未分类":1.0,
 }
 
-SCENARIOS = [-0.20, -0.30, -0.40]
+SCENARIOS = [(-20, -0.20), (-30, -0.30), (-40, -0.40)]
 
 
 def batch_prices(codes):
@@ -80,21 +78,20 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 压力测试 v1 {now:%Y-%m-%d}")
+    print(f"[START] 压力测试 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
 
     hold = state.get("holdings", {})
     cash = hold.get("cash", 0)
-    hold_codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
-    prices = batch_prices(hold_codes)
+    codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
+    prices = batch_prices(codes)
 
-    # 当前市值
     total_cost = 0
     total_mv = 0
     positions = []
-    for code in hold_codes:
+    for code in codes:
         v = hold[code]
         if not isinstance(v, dict):
             continue
@@ -106,8 +103,7 @@ def main():
         total_cost += cost * shares
         total_mv += mv
         a = ATTR.get(code, "未分类")
-        beta = BETA.get(a, 1.0)
-        positions.append((name, mv, cost, a, beta))
+        positions.append((name, mv, a, BETA.get(a, 1.0)))
 
     total_asset = total_mv + cash
 
@@ -116,31 +112,31 @@ def main():
         f"总{total_asset/10000:.0f}万 仓{total_mv/10000:.0f} 现{cash/10000:.0f}万",
     ]
 
-    for pct in SCENARIOS:
-        label = f"跌{abs(int(pct*100))}%"
+    for label, pct in SCENARIOS:
         loss = 0
         attr_loss = {}
-        for name, mv, cost, a, beta in positions:
-            stock_loss = mv * pct * beta
-            loss += stock_loss
-            attr_loss[a] = attr_loss.get(a, 0) + stock_loss
+        for _, mv, a, beta in positions:
+            sl = mv * pct * beta
+            loss += sl
+            attr_loss[a] = attr_loss.get(a, 0) + sl
 
-        post_asset = total_asset + loss
+        post = total_asset + loss
         post_pnl = (total_mv + loss) - total_cost
-        left_cash = cash  # 现金不动
 
         lines.append("")
-        lines.append(f"[{label}] 总→{post_asset/10000:.0f}万 亏{abs(loss)/10000:.1f}万 ({loss/total_asset*100:.1f}%)")
-        lines.append(f"  浮动盈亏→{post_pnl/10000:+.1f}万")
+        lines.append(f"[{label}%] 总→{post/10000:.0f}万 亏{abs(loss)/10000:.1f}万 ({loss/total_asset*100:.1f}%)")
+        lines.append(f"浮动→{post_pnl/10000:+.1f}万")
+        lines.append("")
 
-        # 属性亏损排名
-        worst = sorted(attr_loss.items())[:3]
-        for a, l in worst:
-            if l < 0:
-                lines.append(f"  {a} 亏{abs(l)/10000:.1f}万")
+        sorted_attr = sorted(attr_loss.items(), key=lambda x: x[1])  # 亏损多的排前
+        for a, l in sorted_attr[:5]:
+            if l < -0.01:
+                lines.append(f"  - {a} 亏{abs(l)/10000:.1f}万")
+            else:
+                lines.append(f"  - {a} 无变化")
+        lines.append("")
 
-    lines.append("")
-    lines.append(f"β: 永续0.6 周期1.4 科技1.5 | 现金不动")
+    lines.append(f"> β 永续0.6 高息0.8 品牌0.9 寡头1.0 小众1.1 周期1.4 科技1.5")
 
     push(f"压力测试 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE]")
