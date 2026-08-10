@@ -1,12 +1,12 @@
 """
-框架全量筛选表 v1
-52只框架股票：现价/触发价/差距/PE/PB/共振/属性/持仓
+框架全量筛选表 v2
+批量取价 + 纯文本格式 PushPlus 友好
 每周一推送
 """
 import os
 import json
 import requests
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 
 STATE_FILE = Path(__file__).parent / "framework_state.json"
@@ -14,17 +14,29 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
-def get_price(code):
-    prefix = "sh" if code.startswith("6") else "sz"
-    try:
-        r = requests.get(f"http://qt.gtimg.cn/q={prefix}{code}", timeout=8)
-        r.encoding = "gbk"
-        parts = r.text.split("~")
-        if len(parts) >= 4 and parts[3]:
-            return float(parts[3])
-    except:
-        pass
-    return 0
+def batch_get_prices(codes):
+    """腾讯批量取价：每批40只"""
+    prices = {}
+    for i in range(0, len(codes), 40):
+        batch = codes[i:i+40]
+        symbols = ",".join(
+            f"sh{c}" if c.startswith("6") else f"sz{c}" for c in batch
+        )
+        try:
+            r = requests.get(
+                f"http://qt.gtimg.cn/q={symbols}", timeout=15
+            )
+            r.encoding = "gbk"
+            for line in r.text.strip().split("\n"):
+                if "=" not in line or '""' in line:
+                    continue
+                code = line.split("_")[-1].split("=")[0].replace("sh","").replace("sz","")
+                parts = line.split("~")
+                if len(parts) >= 4 and parts[3]:
+                    prices[code] = float(parts[3])
+        except Exception as e:
+            print(f"  批量取价失败: {e}")
+    return prices
 
 
 def push(title, content):
@@ -41,7 +53,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 框架筛选表 v1 {now:%Y-%m-%d}")
+    print(f"[START] 框架筛选 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -49,79 +61,104 @@ def main():
     hold = state.get("holdings", {})
     trigger = state.get("trigger", {})
 
-    lines = [f"## 📊 框架全量筛选 — {now:%Y.%m.%d}", "",
-             f"{now:%H:%M} | 框架股52只 | 追踪关键位", "",
-             "| # | 股票 | 代码 | 现价 | 触发 | 差距 | PE | PB | 共振 | 持仓 |",
-             "|---|------|------|------|------|------|----|----|------|------|"]
+    # 批量取价
+    all_codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
+    print(f"  批量取价 {len(all_codes)} 只 ...")
+    prices = batch_get_prices(all_codes)
+    print(f"  获取到 {len(prices)} 只价格")
 
-    rows = []
+    lines = [
+        f"## 📊 框架全量筛选 — {now:%Y.%m.%d}",
+        "",
+        f"{now:%H:%M} | 框架股{len(all_codes)}只 | 价格为腾讯实时",
+        "",
+    ]
+
+    # 分组
+    approaching = []    # gap ≤ 10%
+    mid_range = []      # gap 10-30%
+    far_away = []       # gap > 30%
+
     for code, t in trigger.items():
         if not isinstance(t, dict):
             continue
 
         name = t.get("name", code)
         target = t.get("trigger_price", 0)
-        pe_upper = t.get("pe_upper", 0)
-        pb_lower = t.get("pb_lower", 0)
         status = t.get("status", "远离")
         resonance = t.get("resonance", "")
-        attr = t.get("attr", "")
-
-        price = get_price(code)
-        if not price and target:
-            price = t.get("price_now", 0)
-
-        gap = round((price - target) / target * 100, 1) if price and target else 0
-
-        # 实时 PE/PB
         pe_now = t.get("pe_now", 0)
         pb_now = t.get("pb_now", 0)
+        price = prices.get(code, 0)
 
-        # 是否持仓
+        gap = round((price - target) / target * 100, 1) if price and target else 0
         held = "🔴" if code in hold and isinstance(hold.get(code), dict) else ""
 
-        # 共振标记
-        r_tag = ""
-        if "双振" in resonance:
-            r_tag = "⚡"
-        elif status == "已触发":
-            r_tag = "🎯"
-        elif status == "接近":
-            r_tag = "🔹"
-
-        rows.append({
+        entry = {
             "name": name, "code": code, "price": price, "target": target,
             "gap": gap, "pe": pe_now, "pb": pb_now,
-            "r_tag": r_tag, "held": held, "status": status,
-            "pe_upper": pe_upper, "pb_lower": pb_lower,
-        })
+            "resonance": resonance, "held": held, "status": status,
+        }
 
-    # 排序：距触发价最近 → 最远
-    rows.sort(key=lambda x: x["gap"] if x["gap"] > -99 else -99)
+        if status == "已触发" or (gap and gap <= 10):
+            approaching.append(entry)
+        elif gap and gap <= 30:
+            mid_range.append(entry)
+        else:
+            far_away.append(entry)
 
-    for i, r in enumerate(rows, 1):
-        price_s = f"{r['price']:.2f}" if r['price'] else "?"
-        target_s = f"{r['target']:.2f}" if r['target'] else "?"
-        gap_s = f"{r['gap']:.1f}%" if r['gap'] else "?"
-        pe_s = f"{r['pe']:.1f}" if r['pe'] else "?"
-        pb_s = f"{r['pb']:.2f}" if r['pb'] else "?"
+    # ── 输出 ──
+    if approaching:
+        lines.append("### 🎯 接近触发 / 已触发")
+        lines.append("")
+        approaching.sort(key=lambda x: x["gap"] if x["gap"] > -99 else -99)
+        for e in approaching:
+            p_s = f"现{e['price']:.2f}" if e["price"] else "现?"
+            g_s = f"距{e['gap']:.1f}%" if e["gap"] else "?"
+            pe_s = f"PE{e['pe']:.1f}" if e["pe"] else ""
+            pb_s = f"PB{e['pb']:.2f}" if e["pb"] else ""
+            r_s = "⚡双振" if "双振" in e["resonance"] else "🎯已触发" if e["status"] == "已触发" else ""
+            lines.append(
+                f"**{e['name']}** {p_s} 触发{e['target']:.2f} {g_s} {pe_s} {pb_s} {r_s} {e['held']}"
+            )
+            lines.append("")
+    else:
+        lines.append("### 🎯 接近触发")
+        lines.append("无。")
+        lines.append("")
 
-        tag = r["r_tag"]
-        if r["held"]:
-            tag += "🔴" if not r["r_tag"] else ""
+    if mid_range:
+        lines.append("### 🔸 中等距离（10-30%）")
+        lines.append("")
+        mid_range.sort(key=lambda x: x["gap"])
+        for e in mid_range[:15]:
+            p_s = f"现{e['price']:.2f}" if e["price"] else "现?"
+            g_s = f"距{e['gap']:.1f}%"
+            r_s = "⚡" if "双振" in e["resonance"] else ""
+            lines.append(
+                f"**{e['name']}** {p_s} 触发{e['target']:.2f} {g_s} {r_s} {e['held']}"
+            )
+            lines.append("")
+        if len(mid_range) > 15:
+            lines.append(f"> 另有{len(mid_range)-15}只略。")
+            lines.append("")
 
-        lines.append(
-            f"| {i} | {r['name']} | {r['code']} | {price_s} | "
-            f"{target_s} | {gap_s} | {pe_s} | {pb_s} | {tag} | {r['held']} |"
-        )
+    if far_away:
+        lines.append("### 🔹 远离（>30%）")
+        lines.append("")
+        held_away = [e for e in far_away if e["held"]]
+        if held_away:
+            lines.append("仅列出持仓：")
+            for e in held_away:
+                lines.append(f"- **{e['name']}** 现{e['price']:.2f} 触发{e['target']:.2f}")
+            lines.append("")
+        lines.append(f"> 其余{len(far_away)-len(held_away)}只省略。")
 
-    lines.append("")
     lines.append("---")
-    lines.append("⚡双振 | 🎯已触发 | 🔹接近 | 🔴持仓")
-    lines.append(f"📌 筛选逻辑：距触发价≤10% + 双振 = 优先关注。每周一推送。")
+    lines.append(f"📌 每周一推送。⚡双振=估值确认 | 🔴=持仓")
 
     push(f"📊 框架筛选 {now:%Y.%m.%d}", "\n".join(lines))
-    print(f"[DONE] {len(rows)}只已筛选")
+    print(f"[DONE] {len(all_codes)}只")
 
 
 if __name__ == "__main__":
