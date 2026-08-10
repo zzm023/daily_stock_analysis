@@ -1,6 +1,6 @@
 """
-触发价历史追溯 v9
-尝试 parts[43]=52周高 parts[44]=52周低 + 合理性校验
+触发价历史追溯 v10（最终版）
+腾讯 parts[41]/[42] = 近期波动区间 / 50只全覆盖
 """
 import os, json, requests, re
 from datetime import datetime
@@ -11,8 +11,8 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
-def batch_52w(codes):
-    """腾讯批量 → {code: (price, high_52, low_52)} 尝试 indices 43/44"""
+def batch_range(codes):
+    """腾讯批量 parts[41]=近期高 parts[42]=近期低"""
     result = {}
     for i in range(0, len(codes), 30):
         batch = codes[i:i+30]
@@ -27,17 +27,16 @@ def batch_52w(codes):
                 if not m:
                     continue
                 parts = m.group().split("~")
-                if len(parts) < 47:
+                if len(parts) < 45:
                     continue
                 try:
                     price = float(parts[3]) if parts[3] else None
-                    # 尝试 indices 43/44（可能为52周高低）
-                    high_52 = float(parts[43]) if parts[43] else None
-                    low_52 = float(parts[44]) if parts[44] else None
-                    # 校验：合理范围 = 现价 0.3x ~ 3x
-                    if (high_52 and price and 0.3*price < high_52 < 3*price and
-                        low_52 and 0.3*price < low_52 < 3*price):
-                        result[c] = (price, high_52, low_52)
+                    high = float(parts[41]) if parts[41] else None
+                    low = float(parts[42]) if parts[42] else None
+                    if (price and high and low and high > 0 and low > 0
+                        and 0.3*price < low < 3*price
+                        and 0.3*price < high < 3*price):
+                        result[c] = (price, high, low)
                 except:
                     pass
         except Exception as e:
@@ -59,19 +58,18 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 触发价追溯 v9 {now:%Y-%m-%d}")
+    print(f"[START] 触发价追溯 v10 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
 
     trigger = state.get("trigger", {})
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
-    data = batch_52w(codes)
+    data = batch_range(codes)
     print(f"  获取 {len(data)}/{len(codes)} 只")
 
     hit = []
     never = []
-    no_data = []
 
     for code in codes:
         t = trigger[code]
@@ -79,51 +77,55 @@ def main():
         name = t.get("name", code)
         if not tp:
             continue
-
         d = data.get(code)
         if not d:
-            no_data.append((name, tp))
             continue
-
         _, high, low = d
 
         if low <= tp:
-            gap_pct = round((tp - low) / low * 100, 1)
-            hit.append((name, tp, low, high, gap_pct))
+            gap = round((tp - low) / low * 100, 1)
+            hit.append((name, tp, low, high, gap))
         else:
-            gap_pct = round((low - tp) / tp * 100, 1)
-            never.append((name, tp, low, high, gap_pct))
+            gap = round((low - tp) / tp * 100, 1)
+            never.append((name, tp, low, high, gap))
 
     lines = [
         f"触发价追溯 {now:%m}.{now:%d}",
-        f"历史区间 vs 触发价 | {len(data)}/{len(codes)}只有数据",
+        f"近期波动 vs 触发价 | {len(data)}/{len(codes)}只",
+        "",
     ]
 
+    # 全文总结
+    touchable = [n for n,_,l,_,_ in hit if tp] + [n for n,_,l,_,g in never if g <= 5]
+    strict = len(never) - len([n for n,_,_,_,g in never if g <= 5])
+
+    lines.append(f"触发过的 {len(hit)}只 | 距触发≤5% {len([1 for _,_,_,_,g in never if g <= 5])}只 | 偏严 {strict}只")
+    lines.append("")
+
     if hit:
-        hit.sort(key=lambda x: -x[4])
-        lines.append("")
-        lines.append(f"触发过 {len(hit)}只 — 价合理")
-        for name, tp, low, high, gap in hit[:12]:
-            lines.append(f"  - {name} 触发{tp:.2f} 低{low:.2f} 高{high:.2f} 穿透{gap}%")
+        lines.append("触发过（价合理）")
+        for name, tp, low, high, gap in sorted(hit, key=lambda x: -x[4])[:8]:
+            lines.append(f"  - {name} 触发{tp:.2f} 近期低{low:.2f} 穿透{gap}%")
 
-    if never:
-        never.sort(key=lambda x: x[4])
+    close = [(n, tp, l, h, g) for n, tp, l, h, g in never if g <= 5]
+    if close:
         lines.append("")
-        lines.append(f"从未触发 {len(never)}只")
-        for name, tp, low, high, gap in never[:15]:
-            lines.append(f"  - {name} 触发{tp:.2f} 低{low:.2f} 高{high:.2f} 距{gap}%")
-        if len(never) > 15:
-            lines.append(f"  ...等{len(never)}只")
+        lines.append("距触发≤5%（接近）")
+        for name, tp, low, high, gap in sorted(close, key=lambda x: x[4])[:10]:
+            lines.append(f"  - {name} 触发{tp:.2f} 近期低{low:.2f} 距{gap}%")
 
-    if no_data:
+    far = [(n, tp, l, h, g) for n, tp, l, h, g in never if g > 5]
+    if far:
         lines.append("")
-        lines.append(f"无数据 {len(no_data)}只")
+        lines.append(f"距触发>5%（{len(far)}只）")
+        for name, tp, low, high, gap in sorted(far, key=lambda x: x[4])[:8]:
+            lines.append(f"  - {name} 触发{tp:.2f} 近期低{low:.2f} 距{gap}%")
 
     lines.append("")
-    lines.append(f"> 触发≤最低=合理 | 触发>最低=偏严")
+    lines.append(f"> 腾讯数据 parts[41/42]=近期波动区间 | 非52周")
 
     push(f"触发价追溯 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE] 触发过{len(hit)} 从未{len(never)}")
+    print(f"[DONE] 触发过{len(hit)} 接近{len(close)} 偏严{len(far)}")
 
 
 if __name__ == "__main__":
