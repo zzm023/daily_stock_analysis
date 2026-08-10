@@ -1,7 +1,6 @@
 """
-行业集中度监控 v5
-标准行业分类：化工/煤炭/电力/工程机械/家电/医药...
-持仓 + 框架可选 → 新买入参考
+行业集中度监控 v6
+手机优化：去条形图 / 紧凑排版 / 每行一只
 """
 import os
 import json
@@ -80,7 +79,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 行业集中度 v5 {now:%Y-%m-%d}")
+    print(f"[START] 行业集中度 v6 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -94,7 +93,6 @@ def main():
     prices = batch_prices(all_codes)
     cash = hold.get("cash", 0)
 
-    # ── 聚合 ──
     sec_mv = {}
     sec_held = {}
     sec_fw = {}
@@ -119,48 +117,43 @@ def main():
         sec_fw.setdefault(sec, []).append(t.get("name", code))
 
     total_mv = sum(sec_mv.values())
+    total_asset = total_mv + cash
 
-    lines = [f"## 行业集中度 - {now:%m.%d}", "",
-             f"总市值 {total_mv:,.0f} + 现金 {cash:,.0f} = {total_mv+cash:,.0f} | 现金 {cash/(total_mv+cash)*100:.0f}%",
+    # ── 输出 ──
+    lines = [f"# 行业集中度 {now:%m}.{now:%d}",
+             f"总资产 {total_asset/10000:.0f}万 | 持仓 {total_mv/10000:.0f}万 + 现金 {cash/10000:.0f}万 ({cash/total_asset*100:.0f}%)",
              ""]
 
-    # 有持仓的行业
+    lines.append("## 持仓行业")
     for sec in sorted(sec_mv, key=sec_mv.get, reverse=True):
         mv = sec_mv[sec]
         pct = mv / total_mv * 100
-        bar = "#" * int(pct / 5) + "-" * (20 - int(pct / 5))
-        warn = " !!超标" if pct > WARN else ""
-
-        lines.append(f"**{sec}** {pct:.0f}% {bar} {warn}")
+        flag = "⚠️" if pct > WARN else ""
+        lines.append(f"> **{sec}{flag}** {pct:.0f}% | {mv/10000:.1f}万")
         for name, m, pnl in sec_held.get(sec, []):
-            lines.append(f"  [{name}]({m:,.0f}, {pnl:+.0f}%)")
-        lines.append("")
-
-    # 无持仓但有框架股的行业 → 分散参考
-    held_names = {v.get("name", "") for v in hold.values() if isinstance(v, dict)}
-    lines.append("---")
-    lines.append("### 未持仓行业（框架可选）")
+            lines.append(f"　{m/10000:.1f}万 {name} {pnl:+.0f}%")
     lines.append("")
 
-    empty = []
+    # ── 未持仓行业：紧凑 ──
+    held_names = {v.get("name", "") for v in hold.values() if isinstance(v, dict)}
+    unheld_groups = []
     for sec, fws in sec_fw.items():
         if sec in sec_mv:
             continue
         unheld = [n for n in fws if n not in held_names]
         if unheld:
-            empty.append((sec, unheld))
-    empty.sort(key=lambda x: -len(x[1]))
+            unheld_groups.append((sec, unheld))
 
-    for sec, unheld in empty:
-        lines.append(f"**{sec}** 框架{len(unheld)}只: {', '.join(unheld)}")
-
-    over = [(s, sec_mv[s]/total_mv*100) for s in sec_mv if sec_mv[s]/total_mv*100 > WARN]
-    if over:
+    if unheld_groups:
+        lines.append("## 未持仓（框架可选）")
+        for sec, unheld in sorted(unheld_groups, key=lambda x: -len(x[1])):
+            lines.append(f"{sec}：{', '.join(unheld)}")
         lines.append("")
-        lines.append(f"> {WARN}%超标: " + ", ".join(f"{s}{p:.0f}%" for s, p in over))
 
-    push(f"行业集中度 {now:%m.%d}", "\n".join(lines))
-    print(f"[DONE] {len(sec_mv)}行业有持仓")
+    lines.append(f"> 超标阈值 {WARN}% | 分散=保护本金")
+
+    push(f"行业集中度 {now:%m}.{now:%d}", "\n".join(lines))
+    print(f"[DONE] {len(sec_mv)}行业")
 
 
 if __name__ == "__main__":
