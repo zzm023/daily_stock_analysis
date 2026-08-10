@@ -1,6 +1,6 @@
 """
-仓位校准器 v1
-当前仓位 vs 框架建议 → 超限标红 / 空缺提醒 / 调整建议
+仓位校准器 v2
+修复：- 列表强制 pushplus 分行
 """
 import os, json, requests, re
 from datetime import datetime
@@ -76,7 +76,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 仓位校准 v1 {now:%Y-%m-%d}")
+    print(f"[START] 仓位校准 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -105,12 +105,12 @@ def main():
 
     lines = [
         f"仓位校准 {now:%m}.{now:%d}",
-        f"资金{total_capital/10000:.0f}万 持仓{total_mv/10000:.0f}万",
+        f"资金{total_capital/10000:.0f}万 | 持仓{total_mv/10000:.0f}万 | 仓位{total_mv/total_capital*100:.0f}%",
     ]
 
-    over_lines = []
-    ok_lines = []
-    gap_lines = []
+    over = []
+    empty = []
+    ok = []
 
     for a, cap_pct in sorted(CAPS.items(), key=lambda x: x[1], reverse=True):
         cap = total_capital * cap_pct
@@ -118,39 +118,30 @@ def main():
         pct_used = used / cap * 100 if cap else 0
         gap = cap - used
 
-        stock_list = "\n".join(f"    {s}" for s in attr_stocks.get(a, [])) if a in attr_stocks else ""
-
         if pct_used > 100:
-            over_amount = used - cap
-            line = (f"> ⚠️ **{a}** 超{over_amount/10000:.1f}万 "
-                    f"上限{cap/10000:.0f}万 实际{used/10000:.1f}万 {pct_used:.0f}%")
-            over_lines.append(line)
-            if stock_list:
-                over_lines.append(stock_list)
+            over.append(f"- ⚠️ **{a}** 超{abs(gap)/10000:.1f}万 上限{cap/10000:.0f}→实际{used/10000:.1f}万 {pct_used:.0f}%")
+            for s in attr_stocks.get(a, []):
+                over.append(f"    - {s}")
         elif pct_used < 10 and gap > 10000:
-            line = (f"> ○ **{a}** 空{cap/10000:.0f}万 上限{cap/10000:.0f}万 实际{used/10000:.1f}万")
-            gap_lines.append(line)
+            empty.append(f"- ○ **{a}** 上限{cap/10000:.0f}万 未配置")
         else:
-            line = (f"> ✓ **{a}** 上限{cap/10000:.0f}万 实际{used/10000:.1f}万 {pct_used:.0f}% 余{gap/10000:.1f}万")
-            ok_lines.append(line)
-            if stock_list:
-                ok_lines.append(stock_list)
+            ok.append(f"- ✓ **{a}** 上限{cap/10000:.0f}万 实际{used/10000:.1f}万 {pct_used:.0f}%")
+            for s in attr_stocks.get(a, []):
+                ok.append(f"    - {s}")
 
-    if over_lines:
+    if over:
         lines.append("")
         lines.append("超限")
-        lines.extend(over_lines)
-    if gap_lines:
+        lines.extend(over)
+    if empty:
         lines.append("")
         lines.append("空缺")
-        lines.extend(gap_lines)
-    if ok_lines:
+        lines.extend(empty)
+    if ok:
         lines.append("")
         lines.append("正常")
-        lines.extend(ok_lines)
-
+        lines.extend(ok)
     lines.append("")
-    lines.append(f"总仓位{total_mv/total_capital*100:.0f}%")
 
     push(f"仓位校准 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE]")
