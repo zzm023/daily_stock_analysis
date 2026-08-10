@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-08-10T06:22:27",
+    "updated": "2026-08-10T06:23:19",
     "total_capital": 400000
   },
   "trigger": {
@@ -26,7 +26,7 @@
       "pe_upper": 8,
       "pb_lower": 1.0,
       "pe_now": 5.5,
-      "pb_now": 2.45,
+      "pb_now": 2.51,
       "resonance": "🟢 双振",
       "resonance_score": 2,
       "pe_ok": true,
@@ -156,7 +156,7 @@
       "status": "接近",
       "pe_upper": 15,
       "pb_lower": 1.5,
-      "pe_now": 14.4,
+      "pe_now": 14.5,
       "pb_now": 2.08,
       "resonance": "🟡 仅价格",
       "resonance_score": 1,
@@ -498,7 +498,7 @@
       "status": "接近",
       "pe_upper": 18,
       "pb_lower": 4.0,
-      "pe_now": 16.4,
+      "pe_now": 16.3,
       "pb_now": 2.31,
       "resonance": "🟢 双振",
       "resonance_score": 2,
@@ -614,7 +614,7 @@
       "status": "接近",
       "pe_upper": 18,
       "pb_lower": 2.0,
-      "pe_now": 16.2,
+      "pe_now": 16.3,
       "pb_now": 1.89,
       "resonance": "🟢 双振",
       "resonance_score": 2,
