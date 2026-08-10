@@ -1,12 +1,11 @@
 """
-大宗商品价格监控 v5
-数据源：新浪期货 + 100ppi（长超时+移动端兜底）
-GitHub Actions 美国IP限制：现货可能部分不可达
+大宗商品价格监控 v6
+数据源：腾讯期货 qt.gtimg.cn + 新浪兜底
+GitHub Actions 美国IP → 只走能通的通道
 """
 import os
 import json
 import requests
-import re
 from datetime import datetime, date
 from pathlib import Path
 
@@ -15,53 +14,68 @@ DATA_FILE = Path(__file__).parent / "commodity_prices.json"
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
+# 商品 → 腾讯期货代码 → 框架股票
 COMMODITIES = {
-    "碳酸锂": {
-        "stocks": ["000792"], "level": "daily", "unit": "元/吨",
-        "threshold": 0.03, "source": "sina_futures", "code": "LC2507",
-    },
-    "聚合MDI": {
-        "stocks": ["600309"], "level": "daily", "unit": "元/吨",
-        "threshold": 0.02, "source": "100ppi", "ppid": "264",
-    },
-    "钛白粉(金红石型)": {
-        "stocks": ["002601"], "level": "weekly", "unit": "元/吨",
-        "threshold": 0.02, "source": "100ppi", "ppid": "764",
-    },
-    "蛋氨酸": {
-        "stocks": ["600299"], "level": "weekly", "unit": "元/公斤",
-        "threshold": 0.03, "source": "100ppi", "ppid": "843",
-    },
-    "PO42.5水泥": {
-        "stocks": ["600585"], "level": "weekly", "unit": "元/吨",
-        "threshold": 0.02, "source": "100ppi", "ppid": "308",
-    },
-    "动力煤(5500大卡)": {
-        "stocks": ["600585", "600188"], "level": "weekly", "unit": "元/吨",
-        "threshold": 0.02, "source": "100ppi", "ppid": "345",
-    },
-    "氯化钾": {
-        "stocks": ["000792"], "level": "weekly", "unit": "元/吨",
-        "threshold": 0.03, "source": "100ppi", "ppid": "389",
-    },
-    "EVA光伏料": {
-        "stocks": ["603806"], "level": "weekly", "unit": "元/吨",
-        "threshold": 0.02, "source": "100ppi", "ppid": "1139",
-    },
     "天然橡胶": {
         "stocks": ["601058"], "level": "weekly", "unit": "元/吨",
-        "threshold": 0.02, "source": "sina_futures", "code": "RU0",
+        "threshold": 0.02, "code": "RU0",
+    },
+    "碳酸锂": {
+        "stocks": ["000792"], "level": "daily", "unit": "元/吨",
+        "threshold": 0.03, "code": "LC0",
+    },
+    "动力煤": {
+        "stocks": ["600585", "600188"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "code": "ZC0",
+    },
+    "螺纹钢": {
+        "stocks": ["600031"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "code": "RB0",
+    },
+    "沪铜": {
+        "stocks": ["600585"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.03, "code": "CU0",
+    },
+    "PTA": {
+        "stocks": ["603806"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "code": "TA0",
+    },
+    "甲醇": {
+        "stocks": ["600309"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "code": "MA0",
+    },
+    "豆粕": {
+        "stocks": ["300498"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "code": "M0",
     },
 }
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-}
+
+def get_tencent_futures(code):
+    """腾讯期货行情"""
+    try:
+        r = requests.get(f"http://qt.gtimg.cn/q=qj_{code}", timeout=15)
+        r.encoding = "gbk"
+        text = r.text
+        if "~" not in text or '""' in text:
+            return None
+        parts = text.split("~")
+        # 腾讯期货字段: [3]=现价 [4]=昨收 [31]=昨结
+        if len(parts) < 32:
+            return None
+        price = float(parts[3]) if parts[3] else 0
+        prev = float(parts[4]) if parts[4] else float(parts[31]) if len(parts) > 31 and parts[31] else price
+        if not price or price <= 0:
+            return None
+        change_pct = (price - prev) / prev * 100 if prev > 0 else 0
+        return {"price": price, "date": str(date.today()), "change_pct": change_pct}
+    except Exception as e:
+        print(f"  [腾讯期货] {code} 失败: {e}")
+    return None
 
 
 def get_sina_futures(code):
-    """新浪期货"""
+    """新浪兜底"""
     try:
         r = requests.get(f"https://hq.sinajs.cn/list={code}",
                          headers={"Referer": "https://finance.sina.com.cn"}, timeout=15)
@@ -83,40 +97,11 @@ def get_sina_futures(code):
     return None
 
 
-def get_100ppi(ppid, name):
-    """生意社现货 — 两步走：移动端 → 趋势表"""
-    urls = [
-        (f"https://www.100ppi.com/price/detail-{ppid}.html", [
-            r'class="price"[^>]*>(\d+[\.\d]*)<',
-            r'参考报价[：:]\s*(\d+[\.\d]*)',
-        ]),
-        (f"https://www.100ppi.com/price/trend/{ppid}-1.html", [
-            r'<td[^>]*>(\d{4}-\d{2}-\d{2})</td>\s*<td[^>]*>(\d+[\.\d]*)</td>',
-        ]),
-    ]
-    for url, patterns in urls:
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=30)
-            r.encoding = "utf-8"
-            text = r.text
-            for pat in patterns:
-                m = re.search(pat, text)
-                if m:
-                    price = float(m.group(2)) if m.lastindex >= 2 else float(m.group(1))
-                    if price > 0:
-                        return {"price": price, "date": str(date.today()), "change_pct": 0}
-        except Exception as e:
-            print(f"  [100ppi] {url} 超时")
-    print(f"  [100ppi] {name}({ppid}) 所有页面均失败")
-    return None
-
-
 def get_price(name, cfg):
-    if cfg["source"] == "sina_futures":
-        return get_sina_futures(cfg["code"])
-    elif cfg["source"] == "100ppi":
-        return get_100ppi(cfg["ppid"], name)
-    return None
+    result = get_tencent_futures(cfg["code"])
+    if result is None:
+        result = get_sina_futures(cfg["code"])
+    return result
 
 
 def push(title, content):
@@ -134,7 +119,7 @@ def push(title, content):
 def main():
     now = datetime.now()
     weekday = now.weekday()
-    print(f"[START] 大宗商品监控 v5 {now:%Y-%m-%d %H:%M} 周{'一二三四五六日'[weekday]}")
+    print(f"[START] 大宗商品监控 v6 {now:%Y-%m-%d %H:%M} 周{'一二三四五六日'[weekday]}")
 
     history = {}
     if DATA_FILE.exists():
@@ -151,7 +136,6 @@ def main():
             snapshot[name] = history.get(name, {})
             continue
 
-        print(f"\n  [{name}] ...")
         result = get_price(name, cfg)
         if result is None:
             snapshot[name] = history.get(name, {})
@@ -175,12 +159,12 @@ def main():
                 })
 
         snapshot[name] = {"price": new_price, "date": result["date"], "unit": cfg["unit"]}
-        print(f"    ✅ {new_price:,.0f} {cfg['unit']}{chg_str}")
+        print(f"  ✅ {name}: {new_price:,.0f} {cfg['unit']}{chg_str}")
 
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, ensure_ascii=False, indent=2)
 
-    print(f"\n  成功{ok_count}/9 失败{fail_count}")
+    print(f"\n  成功{ok_count}/8 失败{fail_count}")
 
     if not alerts:
         print("[DONE] 无商品异动")
@@ -193,6 +177,7 @@ def main():
         "commodity": a["name"], "price": a["price"],
         "change_str": f"{a['change_pct']:+.1f}%", "stocks": a["stocks"],
     } for a in alerts]
+    state["meta"]["updated"] = now.strftime("%Y-%m-%dT%H:%M:%S")
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
@@ -203,7 +188,7 @@ def main():
         lines.append(f"**{a['name']}** {a['price']:,.0f} {a['unit']} "
                      f"{d}{a['change_pct']:+.1f}% → {', '.join(a['stocks'])}")
         lines.append("")
-    lines.append("> 📌 已联动每日信号分析。")
+    lines.append("> 📌 已联动每日信号分析。商品数据源：腾讯期货 qt.gtimg.cn")
     push(f"⚡ 商品异动 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"\n[DONE] {len(alerts)}项异动已推送")
 
