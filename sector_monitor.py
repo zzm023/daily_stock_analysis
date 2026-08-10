@@ -1,6 +1,6 @@
 """
-行业集中度监控 v9
-pushplus 兼容：- 列表 + 双换行 / 每项分行
+行业集中度监控 v10
+负成本 → 显示"零成本"
 """
 import os
 import json
@@ -79,7 +79,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 行业集中度 v9 {now:%Y-%m-%d}")
+    print(f"[START] 行业集中度 v10 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -95,7 +95,6 @@ def main():
 
     sec_mv = {}
     sec_held = {}
-    sec_fw = {}
 
     for code, v in hold.items():
         if code == "cash" or not isinstance(v, dict):
@@ -104,12 +103,21 @@ def main():
         cost = v.get("cost", 0)
         shares = v.get("shares", 0)
         price = prices.get(code, 0)
-        mv = price * shares if price else cost * shares
+        mv = price * shares if price else 0
         sec = SECTOR.get(code, "其他")
         sec_mv[sec] = sec_mv.get(sec, 0) + mv
-        pnl = (price - cost) / cost * 100 if cost > 0 and price else 0
-        sec_held.setdefault(sec, []).append((name, mv, pnl))
 
+        if cost < 0:
+            pnl_str = "零成本"
+        elif cost > 0 and price:
+            pnl = (price - cost) / cost * 100
+            pnl_str = f"{pnl:+.0f}%"
+        else:
+            pnl_str = "?"
+
+        sec_held.setdefault(sec, []).append(f"{name} {mv/10000:.1f}万 {pnl_str}")
+
+    sec_fw = {}
     for code, t in trigger.items():
         if not isinstance(t, dict):
             continue
@@ -117,35 +125,29 @@ def main():
         sec_fw.setdefault(sec, []).append(t.get("name", code))
 
     total_mv = sum(sec_mv.values())
-    total_asset = total_mv + cash
 
     lines = [
         f"行业集中度 {now:%m}.{now:%d}",
-        f"总{total_asset/10000:.0f}万 仓{total_mv/10000:.0f} 现{cash/10000:.0f}万 ({cash/total_asset*100:.0f}%)",
+        f"总{(total_mv+cash)/10000:.0f}万 仓{total_mv/10000:.0f} 现{cash/10000:.0f}万 ({cash/(total_mv+cash)*100:.0f}%)",
     ]
 
-    # 持仓
     for sec in sorted(sec_mv, key=sec_mv.get, reverse=True):
         pct = sec_mv[sec] / total_mv * 100
         flag = " ⚠️" if pct > WARN else ""
         lines.append(f"■ {sec}{flag} {pct:.0f}%")
-        for name, m, pnl in sec_held[sec]:
-            lines.append(f"  - {name} {m/10000:.1f}万 {pnl:+.0f}%")
+        for s in sec_held[sec]:
+            lines.append(f"  - {s}")
         lines.append("")
 
-    # 未持仓
     held_names = {v.get("name", "") for v in hold.values() if isinstance(v, dict)}
-    empty = []
-    for sec, fws in sec_fw.items():
-        if sec in sec_mv:
-            continue
-        unheld = [n for n in fws if n not in held_names]
-        if unheld:
-            empty.append((sec, unheld))
+    empty = [(sec, [n for n in fws if n not in held_names])
+             for sec, fws in sorted(sec_fw.items(), key=lambda x: -len(x[1]))
+             if sec not in sec_mv]
+    empty = [(s, u) for s, u in empty if u]
 
     if empty:
         lines.append("■ 未持仓")
-        for sec, unheld in sorted(empty, key=lambda x: -len(x[1])):
+        for sec, unheld in empty:
             lines.append(f"  - {sec}：{'、'.join(unheld)}")
         lines.append("")
 
