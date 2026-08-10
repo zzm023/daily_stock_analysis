@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-估值共振检查 v3
-数据源：东方财富push2 API（直连，不需akshare）
+估值共振检查 v4
+数据源：腾讯 qt.gtimg.cn（同 price_monitor，已确认可用）
 每日 16:15 CST
 """
 import os
@@ -16,35 +16,21 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
-def get_valuation_batch(codes):
-    """东方财富 push2 API 批量获取 PE/PB/现价"""
-    results = {}
-    batch_size = 20
-    for i in range(0, len(codes), batch_size):
-        batch = codes[i:i+batch_size]
-        secids = []
-        for c in batch:
-            mkt = "1" if c.startswith("6") else "0"
-            secids.append(f"{mkt}.{c}")
-        url = f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&fields=f2,f3,f9,f23&secids={','.join(secids)}"
-        try:
-            r = requests.get(url, timeout=15, headers={"Referer": "https://quote.eastmoney.com"})
-            d = r.json()
-            if d.get("data") and d["data"].get("diff"):
-                for item in d["data"]["diff"]:
-                    code = item.get("f12", "")
-                    try:
-                        results[code] = {
-                            "price": item.get("f2", 0) or 0,
-                            "pe": item.get("f9", 0) or 0,
-                            "pb": item.get("f23", 0) or 0
-                        }
-                    except:
-                        continue
-            print(f"  批次{i//batch_size+1}: {len(batch)}只 → 获取{len([k for k in batch if k in results])}只")
-        except Exception as e:
-            print(f"  批次{i//batch_size+1}失败: {e}")
-    return results
+def get_valuation(code):
+    """腾讯 API：价格+PE+PB"""
+    prefix = "sh" if code.startswith("6") else "sz"
+    try:
+        r = requests.get(f"http://qt.gtimg.cn/q={prefix}{code}", timeout=10)
+        r.encoding = "gbk"
+        parts = r.text.split("~")
+        if len(parts) < 45:
+            return {"price": 0, "pe": 0, "pb": 0}
+        price = float(parts[3]) if parts[3] else 0
+        pe = float(parts[38]) if len(parts) > 38 and parts[38] and parts[38] != "0.00" else 0
+        pb = float(parts[41]) if len(parts) > 41 and parts[41] and parts[41] != "0.00" else 0
+        return {"price": price, "pe": pe, "pb": pb}
+    except Exception as e:
+        return {"price": 0, "pe": 0, "pb": 0}
 
 
 def push(title, content):
@@ -75,33 +61,31 @@ def git_commit_state():
 
 def main():
     now = datetime.now()
-    print(f"[START] 估值共振检查 v3 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 估值共振检查 v4 {now:%Y-%m-%d %H:%M}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
 
     trigger = state.get("trigger", {})
-
-    # 只查已触发+接近的
-    active_codes = [c for c, v in trigger.items() if v.get("status") in ("已触发", "接近")]
-    print(f"  待查: {len(active_codes)} 只")
-
-    val_data = get_valuation_batch(active_codes) if active_codes else {}
-    print(f"  获取成功: {len(val_data)} 只")
+    active = [(c, v) for c, v in trigger.items() if v.get("status") in ("已触发", "接近")]
+    print(f"  待查: {len(active)} 只")
 
     resonance_hits = []
+    ok_count = 0
 
-    for code in active_codes:
-        v = trigger[code]
+    for code, v in active:
         pe_upper = v.get("pe_upper")
         pb_lower = v.get("pb_lower")
         if not pe_upper and not pb_lower:
             continue
 
-        val = val_data.get(code, {})
-        price = val.get("price", 0)
-        pe = val.get("pe", 0)
-        pb = val.get("pb", 0)
+        val = get_valuation(code)
+        price = val["price"]
+        pe = val["pe"]
+        pb = val["pb"]
+
+        if price > 0:
+            ok_count += 1
 
         pe_ok = pb_ok = div_ok = False
         score = 0
@@ -137,6 +121,8 @@ def main():
 
         if v.get("status") == "已触发" and score >= 2:
             resonance_hits.append((v["name"], code, price, resonance, score, pe, pe_upper, pb, pb_lower))
+
+    print(f"  获取成功: {ok_count}/{len(active)} 只")
 
     state["trigger"] = trigger
     state["meta"] = state.get("meta", {})
