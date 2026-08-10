@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-估值共振检查 v4
-数据源：腾讯 qt.gtimg.cn（同 price_monitor，已确认可用）
+估值共振检查 v5
+数据源：新浪财经批量（同 weekly_review.py，已验证可用）
 每日 16:15 CST
 """
 import os
+import re
 import json
 import requests
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -16,21 +18,52 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
-def get_valuation(code):
-    """腾讯 API：价格+PE+PB"""
-    prefix = "sh" if code.startswith("6") else "sz"
-    try:
-        r = requests.get(f"http://qt.gtimg.cn/q={prefix}{code}", timeout=10)
-        r.encoding = "gbk"
-        parts = r.text.split("~")
-        if len(parts) < 45:
-            return {"price": 0, "pe": 0, "pb": 0}
-        price = float(parts[3]) if parts[3] else 0
-        pe = float(parts[38]) if len(parts) > 38 and parts[38] and parts[38] != "0.00" else 0
-        pb = float(parts[41]) if len(parts) > 41 and parts[41] and parts[41] != "0.00" else 0
-        return {"price": price, "pe": pe, "pb": pb}
-    except Exception as e:
-        return {"price": 0, "pe": 0, "pb": 0}
+def get_batch_valuation(codes):
+    """新浪批量：价格+PE+PB"""
+    symbols = []
+    code_map = {}
+    for code in codes:
+        prefix = "sh" if code.startswith("6") else "sz"
+        sym = f"{prefix}{code}"
+        symbols.append(sym)
+        code_map[sym] = code
+
+    results = {}
+    batch_size = 25
+    headers = {"Referer": "https://finance.sina.com.cn"}
+
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i:i+batch_size]
+        url = "https://hq.sinajs.cn/list=" + ",".join(batch)
+        for retry in range(3):
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+                resp.encoding = "gbk"
+                for line in resp.text.strip().split("\n"):
+                    m = re.search(r'hq_str_(\w+)="(.+)"', line)
+                    if not m:
+                        continue
+                    sym = m.group(1)
+                    fields = m.group(2).split(",")
+                    if len(fields) < 43:
+                        continue
+                    try:
+                        code = code_map.get(sym)
+                        price = float(fields[3]) if fields[3] else 0
+                        pe = float(fields[39]) if fields[39] else 0
+                        pb = float(fields[42]) if fields[42] else 0
+                        results[code] = {"price": price, "pe": pe, "pb": pb}
+                    except (ValueError, IndexError):
+                        pass
+                break
+            except Exception:
+                if retry < 2:
+                    time.sleep(2 * (retry + 1))
+
+        ok = sum(1 for _, v in code_map.items() if _ in results)
+        print(f"  批次{i//batch_size+1}: {ok}/{len(batch)}")
+
+    return results
 
 
 def push(title, content):
@@ -61,31 +94,30 @@ def git_commit_state():
 
 def main():
     now = datetime.now()
-    print(f"[START] 估值共振检查 v4 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 估值共振检查 v5 {now:%Y-%m-%d %H:%M}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
 
     trigger = state.get("trigger", {})
-    active = [(c, v) for c, v in trigger.items() if v.get("status") in ("已触发", "接近")]
-    print(f"  待查: {len(active)} 只")
+    active_codes = [c for c, v in trigger.items() if v.get("status") in ("已触发", "接近")]
+    print(f"  待查: {len(active_codes)} 只")
+
+    val_data = get_batch_valuation(active_codes)
 
     resonance_hits = []
-    ok_count = 0
 
-    for code, v in active:
+    for code in active_codes:
+        v = trigger[code]
         pe_upper = v.get("pe_upper")
         pb_lower = v.get("pb_lower")
         if not pe_upper and not pb_lower:
             continue
 
-        val = get_valuation(code)
-        price = val["price"]
-        pe = val["pe"]
-        pb = val["pb"]
-
-        if price > 0:
-            ok_count += 1
+        val = val_data.get(code, {})
+        price = val.get("price", 0)
+        pe = val.get("pe", 0)
+        pb = val.get("pb", 0)
 
         pe_ok = pb_ok = div_ok = False
         score = 0
@@ -121,8 +153,6 @@ def main():
 
         if v.get("status") == "已触发" and score >= 2:
             resonance_hits.append((v["name"], code, price, resonance, score, pe, pe_upper, pb, pb_lower))
-
-    print(f"  获取成功: {ok_count}/{len(active)} 只")
 
     state["trigger"] = trigger
     state["meta"] = state.get("meta", {})
