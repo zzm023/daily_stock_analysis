@@ -1,0 +1,22 @@
+name: 估值共振检查
+
+on:
+  schedule:
+    - cron: '8 0 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  valuation-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: 运行估值共振检查
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
+        run: python valuation_check.py
