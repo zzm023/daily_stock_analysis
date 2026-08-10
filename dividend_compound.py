@@ -132,7 +132,7 @@ def main():
         lines.append(f"含现金：10年{(total_c10+cash_10)/10000:.0f}万 20年{(total_c20+cash_20)/10000:.0f}万")
 
     lines.append("")
-    lines.append(f"> 参考股息率 | 复利=股息再投)
+    lines.append(f"> 参考股息率 | 复利=股息再投“)
 
     push(f"股息复利推演 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE] 年收租{total_yearly/10000:.2f}万")
