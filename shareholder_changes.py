@@ -170,7 +170,9 @@ def main():
     state = load_state()
     trigger = state.get("trigger", {})
 
-    active_codes = {c for c, v in trigger.items() if v.get("status") in ("已触发","接近")}
+hold = state.get("holdings", {})
+held_codes = {c for c in hold if c != "cash" and isinstance(hold.get(c), dict)}
+active_codes = {c for c, v in trigger.items() if v.get("status") in ("已触发","接近")} | held_codes
     print(f"  触发清单: {len(active_codes)} 只")
 
     hits = []
