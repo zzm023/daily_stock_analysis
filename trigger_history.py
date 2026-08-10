@@ -1,6 +1,6 @@
 """
-触发价历史追溯 v1
-东财周K线数据 → 过去2年触发次数/最低点/平均反弹
+触发价历史追溯 v2
+腾讯API → 52周最低价 vs 触发价 → 判断是否合理
 """
 import os, json, requests, re
 from datetime import datetime
@@ -11,60 +11,30 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
-def fetch_weekly(code):
-    """东财周K线 → [(日期,收盘价)]"""
-    secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
-    try:
-        r = requests.get(
-            "https://push2his.eastmoney.com/api/qt/stock/kline/get",
-            params={
-                "secid": secid, "klt": "105", "fqt": "1",  # 复权
-                "beg": "20240101", "end": datetime.now().strftime("%Y%m%d"),
-                "fields1": "f1,f2", "fields2": "f51",
-            },
-            timeout=15, headers={"Referer": "https://quote.eastmoney.com/"}
-        )
-        data = r.json().get("data", {})
-        klines = data.get("klines", [])
-        rows = []
-        for line in klines:
-            parts = line.split(",")
-            if len(parts) >= 3:
-                rows.append((parts[0][:10], float(parts[2])))
-        return rows
-    except:
-        return []
-
-
-def analyze(rows, trigger_price):
-    """遍历周线：每当收盘价低于触发价 → 记录信号
-    返回触发次数 / 最低点 / 平均反弹%"""
-    below = False
-    low = None
-    entry = None
-    rebounds = []
-    trigger_count = 0
-
-    for date, close in rows:
-        if not below and close <= trigger_price:
-            below = True
-            entry = close
-            low = close
-            trigger_count += 1
-        elif below:
-            low = min(low, close) if low else close
-            if close > trigger_price * 1.05:  # 反弹 5% 算结束
-                if entry and entry > 0:
-                    rebounds.append(round((close - entry) / entry * 100, 1))
-                below = False
-                entry = None
-                low = None
-
-    if trigger_count == 0:
-        return 0, None, None
-
-    avg_rebound = round(sum(rebounds) / len(rebounds), 1) if rebounds else None
-    return trigger_count, low, avg_rebound
+def batch_quote(codes):
+    """取 52周最低 + 当前价"""
+    result = {}
+    for i in range(0, len(codes), 40):
+        batch = codes[i:i+40]
+        symbols = ",".join(f"sh{c}" if c.startswith("6") else f"sz{c}" for c in batch)
+        try:
+            r = requests.get(f"http://qt.gtimg.cn/q={symbols}", timeout=15)
+            r.encoding = "gbk"
+            for c in batch:
+                prefix = "sh" if c.startswith("6") else "sz"
+                m = re.search(f"v_{prefix}{c}=\"[^\"]*\"", r.text)
+                if m:
+                    parts = m.group().split("~")
+                    if len(parts) >= 50:
+                        try:
+                            now_price = float(parts[3]) if parts[3] else 0
+                            low_52 = float(parts[40]) if parts[40] else 0  # 52周最低
+                            result[c] = (now_price, low_52)
+                        except:
+                            pass
+        except Exception as e:
+            print(f"  取价失败: {e}")
+    return result
 
 
 def push(title, content):
@@ -81,66 +51,70 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 触发价追溯 v1 {now:%Y-%m-%d}")
+    print(f"[START] 触发价追溯 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
 
     trigger = state.get("trigger", {})
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
+    quotes = batch_quote(codes)
 
-    results = []
-    for i, code in enumerate(codes):
+    hit = []       # 触发过（价曾低于触发）
+    never = []     # 从未触发
+    no_data = []   # 无数据
+
+    for code in codes:
         t = trigger[code]
         name = t.get("name", code)
         tp = t.get("trigger_price", 0)
         if not tp:
             continue
 
-        print(f"  [{i+1}/{len(codes)}] {name}...")
-        rows = fetch_weekly(code)
-        n, low, avg_r = analyze(rows, tp)
+        q = quotes.get(code)
+        if not q or not q[1]:
+            no_data.append((name, tp))
+            continue
 
-        results.append({
-            "name": name, "tp": tp,
-            "hits": n, "low": low, "avg_rebound": avg_r,
-        })
+        price_52low = q[1]
 
-    results.sort(key=lambda x: x["hits"], reverse=True)
+        if price_52low <= tp:
+            gap = round((tp - price_52low) / price_52low * 100, 1)
+            hit.append((name, tp, price_52low, gap))
+        else:
+            gap = round((tp - price_52low) / price_52low * 100, 1)
+            never.append((name, tp, price_52low, gap))
 
     lines = [
         f"触发价追溯 {now:%m}.{now:%d}",
-        f"过去2年周线 | 共{len(results)}只",
+        f"52周最低 vs 触发价 | 共{len(codes)}只",
     ]
 
-    hit_count = sum(1 for r in results if r["hits"] > 0)
-    lines.append("")
-    lines.append(f"有触发记录：{hit_count}只")
+    if hit:
+        lines.append("")
+        lines.append(f"触发过 {len(hit)}只 — 价合理")
+        for name, tp, low, gap in sorted(hit, key=lambda x: -x[3]):
+            lines.append(f"  - {name} 触发{tp:.2f} 52周低{low:.2f} 穿透{gap:.0f}%")
 
-    for r in results:
-        if r["hits"] == 0:
-            continue
-        parts = [f"- **{r['name']}** 触发{r['tp']:.2f} 命中{r['hits']}次"]
-        if r["low"]:
-            parts.append(f"最低{r['low']:.2f}")
-        if r["avg_rebound"] is not None:
-            parts.append(f"均反弹{r['avg_rebound']:+.1f}%")
-        lines.append(" ".join(parts))
-
-    # 从未触发的
-    never = [r for r in results if r["hits"] == 0]
     if never:
         lines.append("")
-        lines.append(f"从未触发：{len(never)}只")
-        lines.append("触发价可能偏激进↓")
-        for r in never[:10]:
-            lines.append(f"  {r['name']} {r['tp']:.2f}")
+        lines.append(f"从未触发 {len(never)}只 — 可能偏高↓")
+        for name, tp, low, gap in sorted(never, key=lambda x: x[3])[:15]:
+            lines.append(f"  - {name} 触发{tp:.2f} 52周低{low:.2f} 差{gap:.0f}%")
+        if len(never) > 15:
+            lines.append(f"  ...等{len(never)}只")
+
+    if no_data:
+        lines.append("")
+        lines.append(f"无数据 {len(no_data)}只")
+        for name, tp in no_data[:5]:
+            lines.append(f"  - {name} {tp:.2f}")
 
     lines.append("")
-    lines.append(f"> 命中多次=触发价合理 | 0次=可能偏高")
+    lines.append(f"> 触发≤52周低=合理 | 触发>52周低=偏严")
 
     push(f"触发价追溯 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE]")
+    print(f"[DONE] 触发过{len(hit)} 从未{len(never)}")
 
 
 if __name__ == "__main__":
