@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-估值共振检查 v2
-数据源：akshare PE/PB + 新浪价格兜底
-每日 16:15 CST（触发价监控之后）
+估值共振检查 v3
+数据源：东方财富push2 API（直连，不需akshare）
+每日 16:15 CST
 """
 import os
-import re
 import json
 import requests
 import subprocess
@@ -17,40 +16,35 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
-def get_all_valuation():
-    """akshare 全量拉取 PE/PB/现价"""
-    try:
-        import akshare as ak
-        df = ak.stock_zh_a_spot_em()
-        lookup = {}
-        for _, row in df.iterrows():
-            code = row["代码"]
-            try:
-                lookup[code] = {
-                    "price": float(row["最新价"]),
-                    "pe": float(row["市盈率-动态"]) if row["市盈率-动态"] and str(row["市盈率-动态"]) != "-" else 0,
-                    "pb": float(row["市净率"]) if row["市净率"] and str(row["市净率"]) != "-" else 0
-                }
-            except:
-                continue
-        return lookup
-    except Exception as e:
-        print(f"[akshare] 失败: {e}")
-        return {}
-
-
-def get_single_price(code):
-    """腾讯兜底"""
-    try:
-        prefix = "sh" if code.startswith("6") else "sz"
-        r = requests.get(f"http://qt.gtimg.cn/q={prefix}{code}", timeout=5)
-        r.encoding = "gbk"
-        parts = r.text.split("~")
-        if len(parts) >= 4:
-            return float(parts[3])
-    except:
-        pass
-    return 0
+def get_valuation_batch(codes):
+    """东方财富 push2 API 批量获取 PE/PB/现价"""
+    results = {}
+    batch_size = 20
+    for i in range(0, len(codes), batch_size):
+        batch = codes[i:i+batch_size]
+        secids = []
+        for c in batch:
+            mkt = "1" if c.startswith("6") else "0"
+            secids.append(f"{mkt}.{c}")
+        url = f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&fields=f2,f3,f9,f23&secids={','.join(secids)}"
+        try:
+            r = requests.get(url, timeout=15, headers={"Referer": "https://quote.eastmoney.com"})
+            d = r.json()
+            if d.get("data") and d["data"].get("diff"):
+                for item in d["data"]["diff"]:
+                    code = item.get("f12", "")
+                    try:
+                        results[code] = {
+                            "price": item.get("f2", 0) or 0,
+                            "pe": item.get("f9", 0) or 0,
+                            "pb": item.get("f23", 0) or 0
+                        }
+                    except:
+                        continue
+            print(f"  批次{i//batch_size+1}: {len(batch)}只 → 获取{len([k for k in batch if k in results])}只")
+        except Exception as e:
+            print(f"  批次{i//batch_size+1}失败: {e}")
+    return results
 
 
 def push(title, content):
@@ -81,22 +75,24 @@ def git_commit_state():
 
 def main():
     now = datetime.now()
-    print(f"[START] 估值共振检查 v2 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 估值共振检查 v3 {now:%Y-%m-%d %H:%M}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
 
     trigger = state.get("trigger", {})
-    val_data = get_all_valuation()
-    print(f"  akshare 获取 {len(val_data)} 只")
+
+    # 只查已触发+接近的
+    active_codes = [c for c, v in trigger.items() if v.get("status") in ("已触发", "接近")]
+    print(f"  待查: {len(active_codes)} 只")
+
+    val_data = get_valuation_batch(active_codes) if active_codes else {}
+    print(f"  获取成功: {len(val_data)} 只")
 
     resonance_hits = []
 
-    for code, v in trigger.items():
-        status = v.get("status", "")
-        if status not in ("已触发", "接近"):
-            continue
-
+    for code in active_codes:
+        v = trigger[code]
         pe_upper = v.get("pe_upper")
         pb_lower = v.get("pb_lower")
         if not pe_upper and not pb_lower:
@@ -107,46 +103,39 @@ def main():
         pe = val.get("pe", 0)
         pb = val.get("pb", 0)
 
-        if price == 0:
-            price = get_single_price(code)
-
         pe_ok = pb_ok = div_ok = False
         score = 0
 
         if pe_upper and pe > 0 and pe <= pe_upper:
-            pe_ok = True
-            score += 1
-
+            pe_ok = True; score += 1
         if pb_lower and pb > 0 and pb <= pb_lower:
-            pb_ok = True
-            score += 1
+            pb_ok = True; score += 1
 
         dps = v.get("dps", 0)
         anchor = v.get("anchor_pct", 0)
         if dps and anchor and price > 0:
             yld = dps / price * 100
             if yld >= anchor:
-                div_ok = True
-                score += 1
+                div_ok = True; score += 1
 
         if score >= 2:
             resonance = "🟢 三振" if score == 3 else "🟢 双振"
         else:
             resonance = "🟡 仅价格"
 
-        trigger[code]["pe_now"] = round(pe, 1)
-        trigger[code]["pb_now"] = round(pb, 2)
+        trigger[code]["pe_now"] = round(pe, 1) if pe else None
+        trigger[code]["pb_now"] = round(pb, 2) if pb else None
         trigger[code]["resonance"] = resonance
         trigger[code]["resonance_score"] = score
         trigger[code]["pe_ok"] = pe_ok
         trigger[code]["pb_ok"] = pb_ok
         trigger[code]["div_ok"] = div_ok
 
-        pe_info = f"PE{pe:.1f}(≤{pe_upper})" if pe else f"PE?(≤{pe_upper})"
-        pb_info = f"PB{pb:.2f}(≤{pb_lower})" if pb else f"PB?(≤{pb_lower})"
-        print(f"  {v['name']}: {pe_info} {pb_info} → {resonance}")
+        pe_s = f"PE{pe:.1f}" if pe else "PE?"
+        pb_s = f"PB{pb:.2f}" if pb else "PB?"
+        print(f"  {v['name']}: {pe_s}(≤{pe_upper}) {pb_s}(≤{pb_lower}) → {resonance}")
 
-        if status == "已触发" and score >= 2:
+        if v.get("status") == "已触发" and score >= 2:
             resonance_hits.append((v["name"], code, price, resonance, score, pe, pe_upper, pb, pb_lower))
 
     state["trigger"] = trigger
@@ -157,7 +146,7 @@ def main():
 
     if resonance_hits:
         lines = [f"## 🔬 估值共振 — {now:%Y.%m.%d}", "",
-                 f"> {now:%H:%M} | 共振{len(resonance_hits)}只（PE+PB+股息至少双确认）", ""]
+                 f"> {now:%H:%M} | 共振{len(resonance_hits)}只（PE+PB+股息≥2确认）", ""]
         for name, code, price, res, sc, pe, peu, pb, pbl in resonance_hits:
             lines.append(f"**{name}** {res} 得分{sc}/3")
             lines.append(f"> 现价{price:.2f} PE{pe:.1f}(锚≤{peu}) PB{pb:.2f}(锚≤{pbl})")
