@@ -1,6 +1,6 @@
 """
-现金规划器 v2
-修复：条形图上限 + 格式
+现金规划器 v3
+纯数字格式 / pushplus友好 / 超限高亮
 """
 import os, json, requests, re
 from datetime import datetime
@@ -74,17 +74,9 @@ def push(title, content):
         pass
 
 
-def bar(pct):
-    """0-100% → 10char bar，100%以上显示[!]"""
-    if pct > 100:
-        return "██████████ [!!!]"
-    n = int(pct / 10)
-    return "#" * n + "-" * (10 - n)
-
-
 def main():
     now = datetime.now()
-    print(f"[START] 现金规划器 v2 {now:%Y-%m-%d}")
+    print(f"[START] 现金规划器 v3 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -114,8 +106,7 @@ def main():
 
     lines = [
         f"现金规划 {now:%m}.{now:%d}",
-        f"总{(total_mv+cash)/10000:.0f}万 仓{total_mv/10000:.0f} 现{cash/10000:.0f}万",
-        "",
+        f"总{(total_mv+cash)/10000:.0f}万 | 仓{total_mv/10000:.0f} | 现{cash/10000:.0f}万",
     ]
 
     for a, cap_pct in sorted(CAPS.items(), key=lambda x: x[1], reverse=True):
@@ -123,21 +114,28 @@ def main():
         used = attr_mv.get(a, 0)
         remain = cap - used
         pct_used = used / cap * 100 if cap else 0
-        status = f"余{remain/10000:.1f}万" if remain > 0 else "满仓"
-        lines.append(f"{a} 上限{cap/10000:.0f}万 | {bar(pct_used)} {pct_used:.0f}% {status}")
-        for s in attr_stocks.get(a, []):
-            lines.append(f"  - {s}")
+        if pct_used > 100:
+            line = f"> **{a}** {used/10000:.1f}万/{cap/10000:.0f}万 {pct_used:.0f}% 超限"
+        elif remain <= 0:
+            line = f"> **{a}** {used/10000:.1f}万/{cap/10000:.0f}万 满仓"
+        else:
+            line = f"> **{a}** {used/10000:.1f}万/{cap/10000:.0f}万 {pct_used:.0f}% 余{remain/10000:.1f}万"
+
+        lines.append(line)
+
+        if a in attr_stocks:
+            for s in attr_stocks[a]:
+                lines.append(f"  {s}")
         lines.append("")
 
-    # 未持仓类
     empty = [a for a, c in CAPS.items() if a not in attr_mv]
     if empty:
-        lines.append("未持仓类可用")
+        lines.append("可建仓")
         for a in empty:
             lines.append(f"  {a}：{total_capital*CAPS[a]/10000:.1f}万")
-        lines.append("")
 
-    lines.append(f"现金{(cash/(total_mv+cash)*100):.0f}% | 等击球点")
+    lines.append("")
+    lines.append(f"现金{cash/(total_mv+cash)*100:.0f}%")
 
     push(f"现金规划 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE]")
