@@ -1,6 +1,6 @@
 """
-触发价历史追溯 v2
-腾讯API → 52周最低价 vs 触发价 → 判断是否合理
+触发价历史追溯 v3
+修复：52周高/低在 parts[36]/[37]
 """
 import os, json, requests, re
 from datetime import datetime
@@ -12,7 +12,6 @@ PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
 def batch_quote(codes):
-    """取 52周最低 + 当前价"""
     result = {}
     for i in range(0, len(codes), 40):
         batch = codes[i:i+40]
@@ -23,15 +22,19 @@ def batch_quote(codes):
             for c in batch:
                 prefix = "sh" if c.startswith("6") else "sz"
                 m = re.search(f"v_{prefix}{c}=\"[^\"]*\"", r.text)
-                if m:
-                    parts = m.group().split("~")
-                    if len(parts) >= 50:
-                        try:
-                            now_price = float(parts[3]) if parts[3] else 0
-                            low_52 = float(parts[40]) if parts[40] else 0  # 52周最低
-                            result[c] = (now_price, low_52)
-                        except:
-                            pass
+                if not m:
+                    continue
+                parts = m.group().split("~")
+                if len(parts) < 40:
+                    continue
+                try:
+                    now_price = float(parts[3]) if parts[3] else None
+                    high_52 = float(parts[36]) if parts[36] else None      # 52周最高
+                    low_52 = float(parts[37]) if parts[37] else None       # 52周最低
+                    if low_52 and low_52 > 0:
+                        result[c] = (now_price, low_52, high_52)
+                except:
+                    pass
         except Exception as e:
             print(f"  取价失败: {e}")
     return result
@@ -51,7 +54,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 触发价追溯 v2 {now:%Y-%m-%d}")
+    print(f"[START] 触发价追溯 v3 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -60,9 +63,9 @@ def main():
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
     quotes = batch_quote(codes)
 
-    hit = []       # 触发过（价曾低于触发）
-    never = []     # 从未触发
-    no_data = []   # 无数据
+    hit = []
+    never = []
+    no_data = []
 
     for code in codes:
         t = trigger[code]
@@ -72,46 +75,45 @@ def main():
             continue
 
         q = quotes.get(code)
-        if not q or not q[1]:
+        if not q:
             no_data.append((name, tp))
             continue
 
-        price_52low = q[1]
+        _, low_52, high_52 = q
 
-        if price_52low <= tp:
-            gap = round((tp - price_52low) / price_52low * 100, 1)
-            hit.append((name, tp, price_52low, gap))
+        if low_52 <= tp:
+            gap = round((tp - low_52) / low_52 * 100, 1)
+            hit.append((name, tp, low_52, high_52, gap))
         else:
-            gap = round((tp - price_52low) / price_52low * 100, 1)
-            never.append((name, tp, price_52low, gap))
+            gap = round((low_52 - tp) / tp * 100, 1)
+            never.append((name, tp, low_52, high_52, gap))
 
     lines = [
         f"触发价追溯 {now:%m}.{now:%d}",
-        f"52周最低 vs 触发价 | 共{len(codes)}只",
+        f"52周高低 vs 触发价 | {len(quotes)}/{len(codes)}只有数据",
     ]
 
     if hit:
         lines.append("")
-        lines.append(f"触发过 {len(hit)}只 — 价合理")
-        for name, tp, low, gap in sorted(hit, key=lambda x: -x[3]):
-            lines.append(f"  - {name} 触发{tp:.2f} 52周低{low:.2f} 穿透{gap:.0f}%")
+        lines.append(f"触发过 {len(hit)}只 — 合理")
+        for name, tp, low, high, gap in sorted(hit, key=lambda x: -x[3]):
+            lines.append(f"  - {name} 触发{tp:.2f} 低{low:.2f} 穿透{gap:.0f}%")
 
     if never:
         lines.append("")
-        lines.append(f"从未触发 {len(never)}只 — 可能偏高↓")
-        for name, tp, low, gap in sorted(never, key=lambda x: x[3])[:15]:
-            lines.append(f"  - {name} 触发{tp:.2f} 52周低{low:.2f} 差{gap:.0f}%")
+        lines.append(f"从未触发 {len(never)}只 — 可能偏高")
+        never.sort(key=lambda x: x[4])  # gap 小的排前
+        for name, tp, low, high, gap in never[:15]:
+            lines.append(f"  - {name} 触发{tp:.2f} 低{low:.2f} 高{high:.2f} 距低{gap}%")
         if len(never) > 15:
             lines.append(f"  ...等{len(never)}只")
 
     if no_data:
         lines.append("")
         lines.append(f"无数据 {len(no_data)}只")
-        for name, tp in no_data[:5]:
-            lines.append(f"  - {name} {tp:.2f}")
 
     lines.append("")
-    lines.append(f"> 触发≤52周低=合理 | 触发>52周低=偏严")
+    lines.append(f"> 触发≤52周低=合理")
 
     push(f"触发价追溯 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE] 触发过{len(hit)} 从未{len(never)}")
