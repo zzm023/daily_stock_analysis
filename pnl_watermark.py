@@ -1,7 +1,6 @@
 """
-持仓损益水印 v1
-每日计算：总盈亏 / 年化估算 / 最大浮盈股 / 最大浮亏股
-挂 sell_monitor 同一 workflow
+持仓损益水印 v2
+总盈亏 + 最大盈/亏 + 全部持仓
 """
 import os
 import json
@@ -48,7 +47,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 持仓损益水印 v1 {now:%Y-%m-%d}")
+    print(f"[START] 持仓损益水印 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -57,13 +56,13 @@ def main():
     total_capital = state.get("meta", {}).get("total_capital", 400000)
     cash = hold.get("cash", 0)
 
-    # 批量取价
     codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
     prices = batch_prices(codes)
 
     positions = []
     total_cost = 0
     total_mv = 0
+    zero_cost = []
 
     for code, v in hold.items():
         if code == "cash" or not isinstance(v, dict):
@@ -76,7 +75,7 @@ def main():
             price = prices.get(code, 0)
             mv = price * shares if price else 0
             total_mv += mv
-            positions.append({"name": name, "pnl_pct": "∞", "pnl_abs": mv, "mv": mv})
+            zero_cost.append((name, mv))
             continue
 
         cb = cost * shares
@@ -88,7 +87,7 @@ def main():
         pnl_pct = (pnl / cb * 100) if cb else 0
         positions.append({
             "name": name, "pnl_pct": pnl_pct, "pnl_abs": pnl,
-            "mv": mv, "cost": cost, "shares": shares,
+            "mv": mv, "cost": cost,
         })
 
     total_asset = total_mv + cash
@@ -96,29 +95,34 @@ def main():
     total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
     cash_pct = cash / total_asset * 100 if total_asset else 0
 
-    # 排序找最大盈亏
-    sorted_pnl = sorted([p for p in positions if p["pnl_pct"] != "∞"],
-                        key=lambda x: x["pnl_pct"], reverse=True)
-    top_gainer = sorted_pnl[0] if sorted_pnl else None
-    top_loser = sorted_pnl[-1] if sorted_pnl else None
+    positions.sort(key=lambda x: x["pnl_pct"], reverse=True)
+    gainers = [p for p in positions if p["pnl_pct"] >= 0]
+    losers = [p for p in positions if p["pnl_pct"] < 0]
 
     lines = [f"## 💧 持仓损益 — {now:%Y.%m.%d}", "",
              f"{now:%H:%M}", ""]
 
     lines.append(f"💰 总市值 {total_mv:,.0f} + 现金 {cash:,.0f} = **{total_asset:,.0f}**")
     lines.append(f"📊 总成本 {total_cost:,.0f} | 浮动盈亏 {total_pnl:+,.0f}（{total_pnl_pct:+.1f}%）")
-    lines.append(f"🏦 现金占比 {cash_pct:.0f}%")
+    lines.append(f"🏦 现金 {cash_pct:.0f}%")
     lines.append("")
 
-    if top_gainer:
-        lines.append(f"📈 最大浮盈：**{top_gainer['name']}** +{top_gainer['pnl_pct']:.1f}%")
-    if top_loser and top_loser["pnl_pct"] < 0:
-        lines.append(f"📉 最大浮亏：**{top_loser['name']}** {top_loser['pnl_pct']:.1f}%")
-    lines.append("")
+    if gainers:
+        lines.append("### 📈 浮盈")
+        for p in gainers:
+            lines.append(f"- **{p['name']}** 市值{p['mv']:,.0f} | {p['pnl_pct']:+.1f}%")
+        lines.append("")
 
-    # 持仓盈亏一览
-    for p in sorted_pnl[:5] if sorted_pnl else []:
-        lines.append(f"- **{p['name']}** 市值{p['mv']:,.0f} | {p['pnl_pct']:+.1f}%")
+    if losers:
+        lines.append("### 📉 浮亏")
+        for p in losers:
+            lines.append(f"- **{p['name']}** 市值{p['mv']:,.0f} | {p['pnl_pct']:.1f}%")
+        lines.append("")
+
+    if zero_cost:
+        lines.append("### 🏆 零成本")
+        for name, mv in zero_cost:
+            lines.append(f"- **{name}** 市值{mv:,.0f} | 纯利润")
 
     push(f"💧 持仓损益 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"[DONE] 总资产{total_asset:,.0f} 盈亏{total_pnl:+,.0f}")
