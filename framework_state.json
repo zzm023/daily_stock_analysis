@@ -12,6 +12,8 @@
       "current_price": 38.8,
       "gap_pct": 15.24,
       "status": "远离"
+      "pe_upper": 8,
+      "pb_lower": 0.8
     },
     "601601": {
       "name": "中国太保",
@@ -21,6 +23,8 @@
       "current_price": 31.47,
       "gap_pct": 4.9,
       "status": "接近"
+      "pe_upper": 8,
+      "pb_lower": 0.7
     },
     "600018": {
       "name": "上港集团",
@@ -30,6 +34,8 @@
       "current_price": 5.16,
       "gap_pct": 29.0,
       "status": "远离"
+      "pe_upper": 15,
+      "pb_lower": 0.9
     },
     "601816": {
       "name": "京沪高铁",
@@ -39,6 +45,8 @@
       "current_price": 5.04,
       "gap_pct": 20.0,
       "status": "远离"
+      "pe_upper": 20,
+      "pb_lower": 1.0
     },
     "600900": {
       "name": "长江电力",
@@ -48,6 +56,8 @@
       "current_price": 27.75,
       "gap_pct": 28.06,
       "status": "远离"
+      "pe_upper": 18,
+      "pb_lower": 2.0
     },
     "600941": {
       "name": "中国移动",
@@ -57,6 +67,8 @@
       "current_price": 95.5,
       "gap_pct": 11.66,
       "status": "远离"
+      "pe_upper": 12,
+      "pb_lower": 1.0
     },
     "600406": {
       "name": "国电南瑞",
@@ -66,6 +78,8 @@
       "current_price": 24.12,
       "gap_pct": 52.37,
       "status": "远离"
+      "pe_upper": 20,
+      "pb_lower": 2.0
     },
     "600598": {
       "name": "北大荒",
@@ -75,6 +89,8 @@
       "current_price": 12.06,
       "gap_pct": 4.87,
       "status": "接近"
+      "pe_upper": 20,
+      "pb_lower": 2.0
     },
     "603568": {
       "name": "伟明环保",
@@ -84,6 +100,8 @@
       "current_price": 15.41,
       "gap_pct": 6.28,
       "status": "接近"
+      "pe_upper": 20,
+      "pb_lower": 2.5
     },
     "600007": {
       "name": "中国国贸",
@@ -93,6 +111,8 @@
       "current_price": 18.3,
       "gap_pct": 11.18,
       "status": "远离"
+      "pe_upper": 18,
+      "pb_lower": 1.0
     },
     "000429": {
       "name": "粤高速A",
@@ -102,6 +122,8 @@
       "current_price": 14.8,
       "gap_pct": 42.17,
       "status": "远离"
+      "pe_upper": 15,
+      "pb_lower": 1.0
     },
     "000157": {
       "name": "中联重科",
@@ -111,6 +133,8 @@
       "current_price": 7.22,
       "gap_pct": 3.14,
       "status": "接近"
+      "pe_upper": 15,
+      "pb_lower": 1.1
     },
     "600585": {
       "name": "海螺水泥",
@@ -120,7 +144,8 @@
       "current_price": 0,
       "gap_pct": 99,
       "status": "远离",
-      "note": "PB≤0.55"
+      "pe_upper": 20,
+      "pb_lower": 0.55
     },
     "000792": {
       "name": "盐湖股份",
@@ -130,6 +155,8 @@
       "current_price": 28.8,
       "gap_pct": 15.2,
       "status": "远离"
+      "pe_upper": 15,
+      "pb_lower": 1.5
     },
     "600188": {
       "name": "兖矿能源",
@@ -139,6 +166,8 @@
       "current_price": 21.33,
       "gap_pct": 37.61,
       "status": "远离"
+      "pe_upper": 12,
+      "pb_lower": 0.8
     },
     "002601": {
       "name": "龙佰集团",
@@ -148,6 +177,8 @@
       "current_price": 16.21,
       "gap_pct": 20.07,
       "status": "远离"
+      "pe_upper": 18,
+      "pb_lower": 1.5
     },
     "600299": {
       "name": "安迪苏",
@@ -157,6 +188,8 @@
       "current_price": 8.45,
       "gap_pct": 11.18,
       "status": "远离"
+      "pe_upper": 22,
+      "pb_lower": 1.5
     },
     "300498": {
       "name": "温氏股份",
@@ -166,7 +199,8 @@
       "current_price": 0,
       "gap_pct": 99,
       "status": "远离",
-      "note": "PB≤1.5"
+      "pe_upper": 15,
+      "pb_lower": 1.5
     },
     "000651": {
       "name": "格力电器",
@@ -176,6 +210,8 @@
       "current_price": 40.1,
       "gap_pct": 5.53,
       "status": "接近"
+      "pe_upper": 9,
+      "pb_lower": 1.5
     },
     "600066": {
       "name": "宇通客车",
@@ -185,6 +221,8 @@
       "current_price": 31.9,
       "gap_pct": 18.15,
       "status": "远离"
+      "pe_upper": 12,
+      "pb_lower": 2.0
     },
     "000333": {
       "name": "美的集团",
@@ -194,6 +232,8 @@
       "current_price": 83.5,
       "gap_pct": 22.79,
       "status": "远离"
+      "pe_upper": 14,
+      "pb_lower": 2.0
     },
     "600690": {
       "name": "海尔智家",
@@ -203,6 +243,8 @@
       "current_price": 21.93,
       "gap_pct": 9.65,
       "status": "接近"
+      "pe_upper": 13,
+      "pb_lower": 1.5
     },
     "600031": {
       "name": "三一重工",
@@ -212,6 +254,8 @@
       "current_price": 19.58,
       "gap_pct": 15.18,
       "status": "远离"
+      "pe_upper": 18,
+      "pb_lower": 1.2
     },
     "600309": {
       "name": "万华化学",
@@ -221,6 +265,8 @@
       "current_price": 75.72,
       "gap_pct": 11.35,
       "status": "远离"
+      "pe_upper": 20,
+      "pb_lower": 2.0
     },
     "600660": {
       "name": "福耀玻璃",
@@ -230,6 +276,8 @@
       "current_price": 55.4,
       "gap_pct": 10.8,
       "status": "远离"
+      "pe_upper": 15,
+      "pb_lower": 2.5
     },
     "600761": {
       "name": "安徽合力",
@@ -239,6 +287,8 @@
       "current_price": 17.23,
       "gap_pct": 4.42,
       "status": "接近"
+      "pe_upper": 15,
+      "pb_lower": 1.5
     },
     "600486": {
       "name": "扬农化工",
@@ -248,6 +298,8 @@
       "current_price": 55.13,
       "gap_pct": 6.02,
       "status": "接近"
+      "pe_upper": 20,
+      "pb_lower": 2.5
     },
     "601058": {
       "name": "赛轮轮胎",
@@ -257,6 +309,8 @@
       "current_price": 13.61,
       "gap_pct": 13.42,
       "status": "远离"
+      "pe_upper": 12,
+      "pb_lower": 1.2
     },
     "603806": {
       "name": "福斯特",
@@ -266,6 +320,8 @@
       "current_price": 15.61,
       "gap_pct": 15.63,
       "status": "远离"
+      "pe_upper": 28,
+      "pb_lower": 2.0
     },
     "000708": {
       "name": "中信特钢",
@@ -275,6 +331,8 @@
       "current_price": 13.89,
       "gap_pct": 2.89,
       "status": "接近"
+      "pe_upper": 14,
+      "pb_lower": 1.5
     },
     "002027": {
       "name": "分众传媒",
@@ -284,6 +342,8 @@
       "current_price": 5.14,
       "gap_pct": -2.28,
       "status": "已触发"
+      "pe_upper": 14,
+      "pb_lower": 3.0
     },
     "000538": {
       "name": "云南白药",
@@ -293,6 +353,8 @@
       "current_price": 50.76,
       "gap_pct": 8.0,
       "status": "接近"
+      "pe_upper": 20,
+      "pb_lower": 2.0
     },
     "603605": {
       "name": "珀莱雅",
@@ -302,6 +364,8 @@
       "current_price": 57.72,
       "gap_pct": 4.95,
       "status": "接近"
+      "pe_upper": 16,
+      "pb_lower": 4.0
     },
     "605098": {
       "name": "行动教育",
@@ -311,6 +375,8 @@
       "current_price": 57.17,
       "gap_pct": 19.1,
       "status": "远离"
+      "pe_upper": 20,
+      "pb_lower": 4.0
     },
     "600298": {
       "name": "安琪酵母",
@@ -320,6 +386,8 @@
       "current_price": 41.23,
       "gap_pct": 17.8,
       "status": "远离"
+      "pe_upper": 22,
+      "pb_lower": 3.0
     },
     "300628": {
       "name": "亿联网络",
@@ -329,6 +397,8 @@
       "current_price": 39.18,
       "gap_pct": 18.73,
       "status": "远离"
+      "pe_upper": 17,
+      "pb_lower": 4.0
     },
     "002508": {
       "name": "老板电器",
@@ -338,6 +408,8 @@
       "current_price": 15.25,
       "gap_pct": 8.54,
       "status": "接近"
+      "pe_upper": 14,
+      "pb_lower": 2.0
     },
     "002032": {
       "name": "苏泊尔",
@@ -347,6 +419,8 @@
       "current_price": 41.11,
       "gap_pct": 2.77,
       "status": "接近"
+      "pe_upper": 18,
+      "pb_lower": 4.0
     },
     "002884": {
       "name": "凌霄泵业",
@@ -356,6 +430,8 @@
       "current_price": 16.11,
       "gap_pct": 7.4,
       "status": "接近"
+      "pe_upper": 14,
+      "pb_lower": 2.5
     },
     "002318": {
       "name": "久立特材",
@@ -365,6 +441,8 @@
       "current_price": 19.97,
       "gap_pct": 14.11,
       "status": "远离"
+      "pe_upper": 14,
+      "pb_lower": 2.0
     },
     "603855": {
       "name": "华荣股份",
@@ -374,6 +452,8 @@
       "current_price": 16.49,
       "gap_pct": 8.49,
       "status": "接近"
+      "pe_upper": 16,
+      "pb_lower": 2.0
     },
     "603288": {
       "name": "海天味业",
@@ -383,6 +463,8 @@
       "current_price": 36.42,
       "gap_pct": 21.4,
       "status": "远离"
+      "pe_upper": 30,
+      "pb_lower": 5.0
     },
     "603508": {
       "name": "思维列控",
@@ -392,6 +474,8 @@
       "current_price": 22.78,
       "gap_pct": 5.46,
       "status": "接近"
+      "pe_upper": 15,
+      "pb_lower": 1.5
     },
     "600161": {
       "name": "天坛生物",
@@ -401,6 +485,8 @@
       "current_price": 12.49,
       "gap_pct": 8.61,
       "status": "接近"
+      "pe_upper": 19,
+      "pb_lower": 3.0
     },
     "300832": {
       "name": "新产业",
@@ -410,6 +496,8 @@
       "current_price": 48.29,
       "gap_pct": 20.72,
       "status": "远离"
+      "pe_upper": 25,
+      "pb_lower": 4.0
     },
     "688187": {
       "name": "时代电气",
@@ -419,6 +507,8 @@
       "current_price": 49.76,
       "gap_pct": 8.17,
       "status": "接近"
+      "pe_upper": 18,
+      "pb_lower": 2.0
     },
     "300124": {
       "name": "汇川技术",
@@ -428,6 +518,8 @@
       "current_price": 64.6,
       "gap_pct": 37.45,
       "status": "远离"
+      "pe_upper": 35,
+      "pb_lower": 5.0
     },
     "002837": {
       "name": "英维克",
@@ -437,6 +529,8 @@
       "current_price": 55.9,
       "gap_pct": 30.0,
       "status": "远离"
+      "pe_upper": 40,
+      "pb_lower": 5.0
     },
     "300627": {
       "name": "华测导航",
@@ -446,6 +540,8 @@
       "current_price": 28.16,
       "gap_pct": 6.26,
       "status": "接近"
+      "pe_upper": 35,
+      "pb_lower": 4.0
     },
     "002410": {
       "name": "广联达",
@@ -455,6 +551,8 @@
       "current_price": 9.39,
       "gap_pct": 10.47,
       "status": "远离"
+      "pe_upper": 40,
+      "pb_lower": 3.0
     }
   },
   "holdings": {
