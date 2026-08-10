@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-08-10T04:04:20",
+    "updated": "2026-08-10T04:16:50",
     "total_capital": 400000
   },
   "trigger": {
@@ -24,7 +24,14 @@
       "gap_pct": 3.9,
       "status": "接近",
       "pe_upper": 8,
-      "pb_lower": 0.7
+      "pb_lower": 0.7,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 1,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": true
     },
     "600018": {
       "name": "上港集团",
@@ -90,7 +97,14 @@
       "gap_pct": 6.09,
       "status": "接近",
       "pe_upper": 20,
-      "pb_lower": 2.0
+      "pb_lower": 2.0,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 1,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": true
     },
     "603568": {
       "name": "伟明环保",
@@ -101,7 +115,14 @@
       "gap_pct": 8.34,
       "status": "接近",
       "pe_upper": 20,
-      "pb_lower": 2.5
+      "pb_lower": 2.5,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 1,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": true
     },
     "600007": {
       "name": "中国国贸",
@@ -134,7 +155,14 @@
       "gap_pct": 3.14,
       "status": "接近",
       "pe_upper": 15,
-      "pb_lower": 1.1
+      "pb_lower": 1.1,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "600585": {
       "name": "海螺水泥",
@@ -211,7 +239,14 @@
       "gap_pct": 6.87,
       "status": "接近",
       "pe_upper": 9,
-      "pb_lower": 1.5
+      "pb_lower": 1.5,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "600066": {
       "name": "宇通客车",
@@ -288,7 +323,14 @@
       "gap_pct": 5.58,
       "status": "接近",
       "pe_upper": 15,
-      "pb_lower": 1.5
+      "pb_lower": 1.5,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "600486": {
       "name": "扬农化工",
@@ -299,7 +341,14 @@
       "gap_pct": 7.04,
       "status": "接近",
       "pe_upper": 20,
-      "pb_lower": 2.5
+      "pb_lower": 2.5,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "601058": {
       "name": "赛轮轮胎",
@@ -332,7 +381,14 @@
       "gap_pct": 3.78,
       "status": "接近",
       "pe_upper": 14,
-      "pb_lower": 1.5
+      "pb_lower": 1.5,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "002027": {
       "name": "分众传媒",
@@ -343,7 +399,14 @@
       "gap_pct": -0.38,
       "status": "已触发",
       "pe_upper": 14,
-      "pb_lower": 3.0
+      "pb_lower": 3.0,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 1,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": true
     },
     "000538": {
       "name": "云南白药",
@@ -354,7 +417,14 @@
       "gap_pct": 9.26,
       "status": "接近",
       "pe_upper": 20,
-      "pb_lower": 2.0
+      "pb_lower": 2.0,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "603605": {
       "name": "珀莱雅",
@@ -365,7 +435,14 @@
       "gap_pct": 7.04,
       "status": "接近",
       "pe_upper": 16,
-      "pb_lower": 4.0
+      "pb_lower": 4.0,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "605098": {
       "name": "行动教育",
@@ -420,7 +497,14 @@
       "gap_pct": 4.22,
       "status": "接近",
       "pe_upper": 18,
-      "pb_lower": 4.0
+      "pb_lower": 4.0,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "002884": {
       "name": "凌霄泵业",
@@ -431,7 +515,14 @@
       "gap_pct": 8.47,
       "status": "接近",
       "pe_upper": 14,
-      "pb_lower": 2.5
+      "pb_lower": 2.5,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "002318": {
       "name": "久立特材",
@@ -453,7 +544,14 @@
       "gap_pct": 8.49,
       "status": "接近",
       "pe_upper": 16,
-      "pb_lower": 2.0
+      "pb_lower": 2.0,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "603288": {
       "name": "海天味业",
@@ -475,7 +573,14 @@
       "gap_pct": 2.36,
       "status": "接近",
       "pe_upper": 15,
-      "pb_lower": 1.5
+      "pb_lower": 1.5,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "600161": {
       "name": "天坛生物",
@@ -508,7 +613,14 @@
       "gap_pct": 8.09,
       "status": "接近",
       "pe_upper": 18,
-      "pb_lower": 2.0
+      "pb_lower": 2.0,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "300124": {
       "name": "汇川技术",
@@ -541,7 +653,14 @@
       "gap_pct": 6.49,
       "status": "接近",
       "pe_upper": 35,
-      "pb_lower": 4.0
+      "pb_lower": 4.0,
+      "pe_now": 0,
+      "pb_now": 0,
+      "resonance": "🟡 仅价格",
+      "resonance_score": 0,
+      "pe_ok": false,
+      "pb_ok": false,
+      "div_ok": false
     },
     "002410": {
       "name": "广联达",
