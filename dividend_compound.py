@@ -1,6 +1,6 @@
 """
-股息复利推演 v1
-取现价 + 股息率 → 10年/20年复利再投 → 收租本质
+股息复利推演 v2
+修复：差额单位 + 显示所有持仓
 """
 import os, json, requests, re
 from datetime import datetime
@@ -10,8 +10,6 @@ STATE_FILE = Path(__file__).parent / "framework_state.json"
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-# 已知股息率参考（近一年每股分红/现价，%）
-# 只用于 API 获取失败时的 fallback
 REF_YIELD = {
     "600036":5.5,"601601":4.5,"600018":3.0,"601816":2.5,
     "600900":3.5,"600941":4.0,"600406":2.0,"600598":2.5,
@@ -64,7 +62,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 股息复利推演 v1 {now:%Y-%m-%d}")
+    print(f"[START] 股息复利推演 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -95,9 +93,8 @@ def main():
         yearly = mv * div_pct / 100
         total_yearly += yearly
 
-        # 10年复利
-        c10 = mv * ((1 + div_pct/100) ** 10)
-        c20 = mv * ((1 + div_pct/100) ** 20)
+        c10 = mv * ((1 + div_pct/100) ** 10) if div_pct > 0 else mv
+        c20 = mv * ((1 + div_pct/100) ** 20) if div_pct > 0 else mv
 
         rows.append({
             "name": name, "mv": mv, "yield": div_pct,
@@ -108,6 +105,8 @@ def main():
 
     total_c10 = sum(r["c10"] for r in rows)
     total_c20 = sum(r["c20"] for r in rows)
+    gain_10 = (total_c10 - total_mv) / 10000
+    gain_20 = (total_c20 - total_mv) / 10000
 
     lines = [
         f"股息复利推演 {now:%m}.{now:%d}",
@@ -117,23 +116,23 @@ def main():
 
     lines.append("各股年收租")
     for r in rows:
-        if r["yield"] <= 0:
-            continue
-        lines.append(f"  - {r['name']} {r['mv']/10000:.1f}万 × {r['yield']:.1f}% = {r['yearly']/10000:.2f}万/年")
+        if r["yield"] > 0:
+            lines.append(f"  - {r['name']} {r['mv']/10000:.1f}万 × {r['yield']:.1f}% = {r['yearly']/10000:.2f}万/年")
+        else:
+            lines.append(f"  - {r['name']} {r['mv']/10000:.1f}万 无分红（周期股）")
 
     lines.append("")
-    lines.append(f"10年复利再投 → {total_c10/10000:.0f}万 (+{total_c10-total_mv:.0f}万)")
-    lines.append(f"20年复利再投 → {total_c20/10000:.0f}万 (+{total_c20-total_mv:.0f}万)")
+    lines.append(f"10年复利再投 → {total_c10/10000:.0f}万（+{gain_10:.1f}万）")
+    lines.append(f"20年复利再投 → {total_c20/10000:.0f}万（+{gain_20:.1f}万）")
 
-    # 补充：如果现金也参与收租
     if cash > 0:
-        cash_10 = cash * 1.40  # 假设 ~3.5% 复利 10 年
+        cash_10 = cash * 1.40
         cash_20 = cash * 1.99
         lines.append("")
-        lines.append(f"含现金：10年{total_c10/10000+cash_10/10000:.0f}万 20年{total_c20/10000+cash_20/10000:.0f}万")
+        lines.append(f"含现金：10年{(total_c10+cash_10)/10000:.0f}万 20年{(total_c20+cash_20)/10000:.0f}万")
 
     lines.append("")
-    lines.append(f"> 股息率来自近一年参考值 | 复利=股息再投 | 不含股价涨跌")
+    lines.append(f"> 参考股息率 | 复利=股息再投)
 
     push(f"股息复利推演 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE] 年收租{total_yearly/10000:.2f}万")
