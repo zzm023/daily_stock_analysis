@@ -1,7 +1,7 @@
 """
-触发价动态调整 v1
-每季度/手动：PE分位变化 → 建议调整触发价
-写入 framework_state.json → trigger_adjustments
+触发价动态调整 v2
+修正：PB低于锚时不拉高 / 涨幅>30%标记重评
+每季度/手动
 """
 import os
 import json
@@ -13,7 +13,6 @@ STATE_FILE = Path(__file__).parent / "framework_state.json"
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-# 框架股：code → (锚PE, 锚PB, 板块)
 FRAMEWORK = {
     "600036": (8, 1.0, "银行"), "601601": (8, 1.0, "保险"),
     "600018": (15, 0.9, "港口"), "601816": (20, 1.0, "铁路"),
@@ -86,7 +85,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 触发价动态调整 v1 {now:%Y-%m-%d}")
+    print(f"[START] 触发价动态调整 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -94,8 +93,6 @@ def main():
     trigger = state.get("trigger", {})
 
     adjustments = []
-    lines = [f"## 🔧 触发价动态调整 — {now:%Y.%m.%d}", "",
-             f"{now:%H:%M}", ""]
 
     for code, (anchor_pe, anchor_pb, sector) in FRAMEWORK.items():
         t = trigger.get(code)
@@ -107,69 +104,76 @@ def main():
         price = get_price(code)
         pe_now, pb_now = get_pe_pb(code)
 
-        if not old_trigger or not price:
+        if not old_trigger or not price or not pe_now or not pb_now:
             continue
 
-        # 计算新的理论触发价
-        # 方法：锚PE × 当前EPS
-        # EPS 反推 = 股价 / PE_now
-        if pe_now and pe_now > 0:
-            eps = price / pe_now
-            new_trigger_from_pe = anchor_pe * eps
-        else:
-            new_trigger_from_pe = old_trigger
+        # PE 维度：锚PE × (股价/当前PE)
+        eps = price / pe_now
+        trigger_pe = anchor_pe * eps
 
-        if pb_now and pb_now > 0:
-            bvps = price / pb_now
-            new_trigger_from_pb = anchor_pb * bvps
+        # PB 维度：锚PB × (股价/当前PB)，但 PB < 锚时保底=股价（不拉高）
+        bvps = price / pb_now
+        if pb_now < anchor_pb:
+            trigger_pb = price  # PB已低估，不借PB拉高触发
         else:
-            new_trigger_from_pb = old_trigger
+            trigger_pb = anchor_pb * bvps
 
-        # 取两者均值作为建议触发价
-        suggested = round((new_trigger_from_pe + new_trigger_from_pb) / 2, 2)
+        # 取两者较低值（保守）
+        suggested = round(min(trigger_pe, trigger_pb), 2)
         change_pct = round((suggested - old_trigger) / old_trigger * 100, 1)
 
-        # 只有变化超过 5% 才推送
-        if abs(change_pct) >= 5:
+        if abs(change_pct) >= 10:
             direction = "⬆️" if change_pct > 0 else "⬇️"
+            note = ""
+            if change_pct > 30:
+                note = "⚠️ 旧价严重过时"
+            elif change_pct < -20:
+                note = "⚠️ 估值恶化"
+
             adjustments.append({
-                "code": code, "name": name, "old_trigger": old_trigger,
-                "suggested": suggested, "change_pct": change_pct,
-                "direction": direction, "sector": sector,
-                "pe_now": pe_now, "pb_now": pb_now,
-                "anchor_pe": anchor_pe, "anchor_pb": anchor_pb,
+                "code": code, "name": name, "old": old_trigger,
+                "new": suggested, "chg": change_pct,
+                "dir": direction, "pe_now": pe_now, "anchor_pe": anchor_pe,
+                "pb_now": pb_now, "anchor_pb": anchor_pb, "note": note,
             })
 
     if not adjustments:
-        lines.append("✅ 所有触发价合理，无需调整。")
-        lines.append("")
-        lines.append("> 基准：锚PE/PB × 当前EPS/BVPS。变动 <5% 不报告。")
-    else:
-        adjustments.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
-        lines.append("| 股票 | 代码 | 旧触发 | 建议 | 变动 | 原因 |")
-        lines.append("|------|------|--------|------|------|------|")
-        for a in adjustments:
-            reason = f"PE{a['pe_now']:.1f}(锚{a['anchor_pe']}) PB{a['pb_now']:.2f}(锚{a['anchor_pb']})"
-            lines.append(
-                f"| {a['name']} | {a['code']} | {a['old_trigger']:.2f} | "
-                f"{a['suggested']:.2f} | {a['direction']}{a['change_pct']:+.1f}% | {reason} |"
-            )
-        lines.append("")
-        lines.append("### 📝 调整逻辑")
-        lines.append("建议触发价 = (锚PE×EPS + 锚PB×BVPS) / 2")
-        lines.append("EPS从当前PE反推，BVPS从当前PB反推。")
-        lines.append("")
-        lines.append("⚠️ **需手动确认**后更新 framework_state.json。")
+        lines = ["## 🔧 触发价动态调整 — 无需调整", "",
+                 "✅ 所有触发价与当前估值一致，变动 <10%。"]
+        push(f"🔧 触发价调整 {now:%Y.%m.%d}", "\n".join(lines))
+        print("[DONE] 无需调整")
+        return
 
-        # 写入建议
-        state["trigger_adjustments"] = [
-            {"code": a["code"], "name": a["name"],
-             "old": a["old_trigger"], "suggested": a["suggested"],
-             "change_pct": a["change_pct"], "date": now.strftime("%Y-%m-%d")}
-            for a in adjustments
-        ]
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
+    adjustments.sort(key=lambda x: abs(x["chg"]), reverse=True)
+
+    lines = [f"## 🔧 触发价调整建议 — {now:%Y.%m.%d}", "",
+             f"{now:%H:%M} | {len(adjustments)}只变动≥10%", "",
+             "> 逻辑：锚PE×当前EPS 与 现价(如PB已低估) 取较低值",
+             ""]
+
+    for a in adjustments:
+        pe_info = f"PE{a['pe_now']:.1f}(锚{a['anchor_pe']})"
+        pb_info = f"PB{a['pb_now']:.2f}(锚{a['anchor_pb']})"
+        lines.append(
+            f"**{a['name']}** {a['dir']}{a['chg']:+.1f}% | "
+            f"旧{a['old']:.2f} → 新{a['new']:.2f} | {pe_info} {pb_info}"
+        )
+        if a["note"]:
+            lines.append(f"> {a['note']}")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("⚠️ 涨幅>30%说明旧触发价严重过时。**需手动确认**后更新。")
+    lines.append("> 已写入 framework_state.json → trigger_adjustments")
+
+    state["trigger_adjustments"] = [
+        {"code": a["code"], "name": a["name"],
+         "old": a["old"], "suggested": a["new"],
+         "change_pct": a["chg"], "date": now.strftime("%Y-%m-%d")}
+        for a in adjustments
+    ]
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
 
     push(f"🔧 触发价调整 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"[DONE] {len(adjustments)}只建议调整")
