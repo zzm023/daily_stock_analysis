@@ -1,11 +1,12 @@
 """
-全市场估值温度 v3
-数据源：新浪指数价格 + 乐股网 PE/PB 分位
+全市场估值温度 v4
+新浪指数价格 + 中证指数官网 PE/PB
 每日 17:00 CST
 """
 import os
 import json
 import requests
+import re
 from datetime import datetime, date
 from pathlib import Path
 
@@ -14,14 +15,14 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 INDICES = {
-    "沪深300": {"sina": "s_sh000300", "lg_code": "000300"},
-    "上证50":  {"sina": "s_sh000016", "lg_code": "000016"},
-    "中证500": {"sina": "s_sh000905", "lg_code": "000905"},
+    "沪深300": {"sina": "s_sh000300", "cs": "000300"},
+    "上证50":  {"sina": "s_sh000016", "cs": "000016"},
+    "中证500": {"sina": "s_sh000905", "cs": "000905"},
 }
 
 
 def get_sina_index(sina_code):
-    """新浪指数行情"""
+    """新浪指数：字段[1]=现价 [2]=涨跌额 [3]=涨跌幅%"""
     try:
         r = requests.get(f"https://hq.sinajs.cn/list={sina_code}",
                          headers={"Referer": "https://finance.sina.com.cn"}, timeout=10)
@@ -30,58 +31,72 @@ def get_sina_index(sina_code):
         if "=" not in text or '""' in text:
             return None
         data = text.split('"')[1].split(",")
-        if len(data) < 5:
+        if len(data) < 4:
             return None
         price = float(data[1]) if data[1] else 0
-        prev = float(data[2]) if data[2] else price
-        change_pct = (price - prev) / prev * 100 if prev > 0 else 0
-        return {"price": price, "chg_pct": change_pct}
+        chg_pct = float(data[3]) if data[3] else 0
+        return {"price": price, "chg_pct": chg_pct}
     except Exception as e:
-        print(f"  [新浪指数] {sina_code} 失败: {e}")
+        print(f"  [新浪] {sina_code}: {e}")
     return None
 
 
-def get_legulegu_pepb(code):
-    """乐股网 PE/PB 及分位"""
+def get_csindex_pepb(code):
+    """中证指数官网 PE/PB"""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://www.legulegu.com/",
+            "Referer": "https://www.csindex.com.cn/",
         }
-        # PE
-        url_pe = f"https://www.legulegu.com/api/stockdata/market-index-pe-pb/get-market-index-pe-pb"
-        params_pe = {"indexCode": code, "type": "pe"}
-        r_pe = requests.get(url_pe, params=params_pe, headers=headers, timeout=15)
-        pe_data = r_pe.json()
-
-        # PB
-        params_pb = {"indexCode": code, "type": "pb"}
-        r_pb = requests.get(url_pb, params=params_pb, headers=headers, timeout=15)
-        pb_data = r_pb.json()
-
-        pe_list = pe_data.get("data", []) if isinstance(pe_data, dict) else []
-        pb_list = pb_data.get("data", []) if isinstance(pb_data, dict) else []
-
-        if not pe_list or not pb_list:
+        url = f"https://www.csindex.com.cn/csindex-home/perf/index-perf"
+        params = {
+            "indexCode": code,
+            "startDate": (date.today().replace(day=1) - __import__('datetime').timedelta(days=180)).strftime("%Y-%m-%d"),
+            "endDate": date.today().strftime("%Y-%m-%d"),
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=15)
+        # csindex 可能要求更多headers
+        data = r.json()
+        if data.get("errorCode") != "0" or not data.get("data"):
             return None
-
-        latest_pe = pe_list[-1]
-        latest_pb = pb_list[-1]
-
-        pe_val = float(latest_pe.get("value", 0))
-        pe_pct = float(latest_pe.get("percentile", 0))
-        pb_val = float(latest_pb.get("value", 0))
-        pb_pct = float(latest_pb.get("percentile", 0))
-
+        items = data["data"]
+        if not items:
+            return None
+        latest = items[-1]
         return {
-            "pe": pe_val,
-            "pb": pb_val,
-            "pe_pct": pe_pct,
-            "pb_pct": pb_pct,
+            "pe": float(latest.get("pe1", 0)),
+            "pb": float(latest.get("pb1", 0)),
+            "date": latest.get("tradedate", ""),
         }
     except Exception as e:
-        print(f"  [乐股网] {code} 失败: {e}")
+        print(f"  [中证指数] {code}: {e}")
     return None
+
+
+def get_eastmoney_pepb_alt(code):
+    """东方财富指数估值-备选方案"""
+    try:
+        url = "https://push2.eastmoney.com/api/qt/stock/get"
+        # 指数 secid 格式：1.000300
+        secid = f"1.{code}"
+        params = {
+            "secid": secid,
+            "fields": "f43,f44,f45,f46,f47,f48,f50,f51,f52,f57,f58,f60,f107,f115,f116,f117,f118,f119,f120,f121,f122,f168,f169,f170,f171",
+            "fltt": 2,
+        }
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        if not data.get("data"):
+            return None
+        d = data["data"]
+        # 尝试多个可能的PE字段
+        pe = (d.get("f115") or d.get("f116") or 0) / 100
+        pb = (d.get("f117") or d.get("f118") or 0) / 100
+        if pe <= 0 or pe > 1000:
+            return None
+        return {"pe": pe, "pb": pb}
+    except:
+        return None
 
 
 def load_history():
@@ -94,17 +109,6 @@ def load_history():
 def save_history(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def temp_label(pct):
-    if pct is None:
-        return "❓", ""
-    if pct <= 30:
-        return "🧊 低估", f"分位{pct:.0f}% → 可适当出手"
-    elif pct <= 70:
-        return "🌤 正常", f"分位{pct:.0f}% → 耐心等待"
-    else:
-        return "🔥 高估", f"分位{pct:.0f}% → 出手收紧"
 
 
 def push(title, content):
@@ -123,7 +127,7 @@ def push(title, content):
 def main():
     now = datetime.now()
     today_str = str(date.today())
-    print(f"[START] 全市场估值温度 v3 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 全市场估值温度 v4 {now:%Y-%m-%d %H:%M}")
 
     history = load_history()
     lines = [f"## 🌡 全市场估值温度 — {now:%Y.%m.%d}", "",
@@ -131,63 +135,88 @@ def main():
 
     for name, cfg in INDICES.items():
         idx = get_sina_index(cfg["sina"])
-        val = get_legulegu_pepb(cfg["lg_code"])
+        val = get_eastmoney_pepb_alt(cfg["cs"])
 
         if idx is None:
-            lines.append(f"### {name}")
-            lines.append("> ⚠️ 价格获取失败")
+            lines.append(f"### {name}  ⚠️ 价格获取失败")
             lines.append("")
             continue
 
+        price = idx["price"]
+        chg = idx["chg_pct"]
+
         if val is None:
             lines.append(f"### {name}")
-            lines.append(f"指数 {idx['price']:,.0f} | 日涨跌{idx['chg_pct']:+.1f}%")
-            lines.append("> ⚠️ PE/PB获取失败")
+            lines.append(f"指数 {price:,.0f} | 日涨跌{chg:+.2f}%")
+            lines.append("> ⚠️ PE/PB 获取失败，历史不足")
+            lines.append("")
+
+            # 累积历史（仅价格）
+            h = history.setdefault(name, {"pe": []})
+            if not h["pe"] or not h["pe"][-1].startswith(today_str):
+                h["pe"].append(f"{today_str}:{price:.0f}")
             lines.append("")
             continue
 
         pe = val["pe"]
         pb = val["pb"]
-        pe_pct = val["pe_pct"]
-        pb_pct = val["pb_pct"]
 
-        pe_label, pe_advice = temp_label(pe_pct)
-        pb_label, pb_advice = temp_label(pb_pct)
+        # 累积历史
+        h = history.setdefault(name, {"pe": [], "pb": []})
+        if not h["pe"] or not h["pe"][-1].startswith(today_str):
+            h["pe"].append(f"{today_str}:{pe:.2f}")
+            h["pb"].append(f"{today_str}:{pb:.2f}")
+            if len(h["pe"]) > 500:
+                h["pe"] = h["pe"][-500:]
 
-        avg_pct = (pe_pct + pb_pct) / 2
-        if avg_pct <= 30:
-            overall = "🧊 低估"
-        elif avg_pct > 70:
-            overall = "🔥 高估"
+        # 计算分位数
+        pe_vals = [float(v.split(":")[1]) for v in h["pe"] if ":" in v]
+        pb_vals = [float(v.split(":")[1]) for v in h["pb"] if ":" in v]
+
+        def pct_calc(vals, cur):
+            if len(vals) < 5 or not cur:
+                return None
+            return round(sum(1 for v in vals if v < cur) / len(vals) * 100, 1)
+
+        pe_pct = pct_calc(pe_vals, pe)
+        pb_pct = pct_calc(pb_vals, pb)
+
+        def label(p):
+            if p is None:
+                return "❓", ""
+            if p <= 30:
+                return "🧊 低估", f"分位{p:.0f}% → 可适当出手"
+            elif p <= 70:
+                return "🌤 正常", f"分位{p:.0f}% → 耐心等待"
+            else:
+                return "🔥 高估", f"分位{p:.0f}% → 出手收紧"
+
+        pe_l, pe_a = label(pe_pct)
+        pb_l, pb_a = label(pb_pct)
+
+        if pe_pct and pb_pct:
+            avg = (pe_pct + pb_pct) / 2
         else:
-            overall = "🌤 正常"
+            avg = pe_pct or pb_pct or 50
+        overall = "🧊 低估" if avg <= 30 else "🔥 高估" if avg > 70 else "🌤 正常"
 
         lines.append(f"### {name}")
-        lines.append(f"指数 {idx['price']:,.0f} | 日涨跌{idx['chg_pct']:+.1f}%")
-        lines.append(f"> PE {pe:.1f}（分位{pe_pct:.0f}%）→ {pe_label}")
-        lines.append(f"> PB {pb:.2f}（分位{pb_pct:.0f}%）→ {pb_label}")
+        lines.append(f"指数 {price:,.0f} | 日涨跌{chg:+.2f}%")
+        pe_pct_s = f"（分位{pe_pct:.0f}%）" if pe_pct else "（累积中）"
+        pb_pct_s = f"（分位{pb_pct:.0f}%）" if pb_pct else ""
+        lines.append(f"> PE {pe:.1f}{pe_pct_s} → {pe_l}")
+        lines.append(f"> PB {pb:.2f}{pb_pct_s} → {pb_l}")
         lines.append(f"> 综合：**{overall}**")
         lines.append("")
 
-        print(f"  {name}: {idx['price']:,.0f} PE{pe:.1f}({pe_pct:.0f}%) PB{pb:.2f}({pb_pct:.0f}%) → {overall}")
-
-        # 累积历史
-        if name not in history:
-            history[name] = {"pe": [], "pb": []}
-        hist = history[name]
-        key = f"{today_str}:{pe:.2f}:{pe_pct:.0f}%"
-        if not hist["pe"] or not hist["pe"][-1].startswith(today_str):
-            hist["pe"].append(key)
-            hist["pb"].append(f"{today_str}:{pb:.2f}:{pb_pct:.0f}%")
-            if len(hist["pe"]) > 500:
-                hist["pe"] = hist["pe"][-500:]
+        print(f"  {name}: {price:,.0f} PE{pe:.1f}({pe_pct}) PB{pb:.2f}({pb_pct}) → {overall}")
 
     save_history(history)
 
     max_days = max((len(history[n]["pe"]) for n in history if "pe" in history[n]), default=0)
     lines.append("---")
     lines.append("**框架联动：** 低估时触发价可适当放宽；高估时严守触发价不追高。")
-    lines.append(f"📊 累积历史{max_days}天 | 下次更新：明天")
+    lines.append(f"📊 累积{max_days}天 | 分位数需5天+历史")
 
     push(f"🌡 估值温度 {now:%Y.%m.%d}", "\n".join(lines))
     print("[DONE]")
