@@ -1,6 +1,6 @@
 """
-复盘笔记 v1
-每日收盘：盈亏变化 / 新接近触发 / 卖出信号
+复盘笔记 v2
+修复：列表格式 / 日变首跑提示
 """
 import os, json, requests, re
 from datetime import datetime, timedelta
@@ -46,7 +46,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 复盘笔记 v1 {now:%Y-%m-%d}")
+    print(f"[START] 复盘笔记 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -55,14 +55,13 @@ def main():
     cash = hold.get("cash", 0)
     trigger = state.get("trigger", {})
     sell_signals = state.get("sell_signals", [])
-    prev_snapshot = state.get("snapshot", {})
+    prev = state.get("snapshot", {})
 
     hold_codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
     fw_codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
     all_codes = list(set(hold_codes + fw_codes))
     prices = batch_prices(all_codes)
 
-    # ── 1. 盈亏快照 ──
     total_cost = 0
     total_mv = 0
     for code in hold_codes:
@@ -73,29 +72,25 @@ def main():
         shares = v.get("shares", 0)
         price = prices.get(code, 0)
         if cost < 0:
-            mv = price * shares if price else 0
-            total_mv += mv
+            total_mv += price * shares if price else 0
         else:
             total_cost += cost * shares
             total_mv += price * shares if price else cost * shares
 
     total_pnl = total_mv - total_cost
-    prev_pnl = prev_snapshot.get("total_pnl", total_pnl)
+    prev_pnl = prev.get("total_pnl", total_pnl)
     pnl_change = total_pnl - prev_pnl
+    change_str = f"{pnl_change/10000:+.1f}万" if prev else "首跑"
 
     lines = [
         f"复盘 {now:%m}.{now:%d}",
-        f"总{(total_mv+cash)/10000:.0f}万 | 盈亏{total_pnl/10000:+.1f}万 | 日变{pnl_change/10000:+.1f}万",
-        "",
+        f"总{(total_mv+cash)/10000:.0f}万 盈亏{total_pnl/10000:+.1f}万 日变{change_str}",
     ]
 
-    # ── 2. 新接近触发 ──
-    lines.append("新接近触发")
+    # 新接近触发
     approaching = []
     for code, t in trigger.items():
-        if not isinstance(t, dict):
-            continue
-        if code in hold_codes:
+        if not isinstance(t, dict) or code in hold_codes:
             continue
         name = t.get("name", code)
         target = t.get("trigger_price", 0)
@@ -104,27 +99,21 @@ def main():
             continue
         gap = (price - target) / target * 100
         if gap <= 10:
-            approaching.append((name, price, target, gap))
+            res = "⚡" if "双振" in t.get("resonance", "") else ""
+            approaching.append((gap, f"- {name} {price:.2f}→{target:.2f} {gap:+.1f}% {res}"))
 
-    if approaching:
-        for name, price, target, gap in sorted(approaching, key=lambda x: x[3]):
-            lines.append(f"  {name} {price:.2f}→{target:.2f} {gap:+.1f}%")
-    else:
-        lines.append("  无")
     lines.append("")
+    lines.append(f"触发≤10%：{len(approaching)}只")
+    for _, s in sorted(approaching):
+        lines.append(s)
 
-    # ── 3. 卖出信号 ──
-    lines.append("卖出信号")
-    if sell_signals:
-        for s in sell_signals[-3:]:  # 最近 3 条
-            lines.append(f"  {s.get('name','?')}: {s.get('reason','?')}")
-    else:
-        lines.append("  无信号")
+    # 卖出
+    lines.append("")
+    lines.append(f"卖出：{'有信号' if sell_signals else '无'}")
 
     lines.append("")
     lines.append(f"{now:%H:%M}")
 
-    # 保存快照
     state["snapshot"] = {
         "date": now.strftime("%Y-%m-%d"),
         "total_mv": total_mv,
@@ -136,7 +125,7 @@ def main():
         json.dump(state, f, ensure_ascii=False, indent=2)
 
     push(f"复盘 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE] 日变{pnl_change/10000:+.1f}万")
+    print(f"[DONE]")
 
 
 if __name__ == "__main__":
