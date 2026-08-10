@@ -1,8 +1,8 @@
 """
-触发价历史追溯 v6
-东财批量API → 一次取50只52周高低
+触发价历史追溯 v7
+东财快照逐只取 + sleep 防限流 → 稳定的 52 周高低
 """
-import os, json, requests
+import os, json, requests, time
 from datetime import datetime
 from pathlib import Path
 
@@ -11,37 +11,34 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
-def batch_52w(codes):
-    """东财批量 → {code: {price, high_52, low_52}}"""
-    secids = ",".join(f"1.{c}" if c.startswith("6") else f"0.{c}" for c in codes)
+def get_52w(code):
+    prefix = "1" if code.startswith("6") else "0"
+    secid = f"{prefix}.{code}"
     try:
         r = requests.get(
-            "https://push2.eastmoney.com/api/qt/ulist.np/get",
+            "https://push2.eastmoney.com/api/qt/stock/get",
             params={
-                "secids": secids,
-                "fields": "f2,f12,f51,f52",
-                "fltt": "2",
+                "secid": secid,
+                "fields": "f43,f51,f52",
             },
-            timeout=15,
+            timeout=10,
             headers={"Referer": "https://quote.eastmoney.com/"}
         )
         data = r.json().get("data")
         if not data:
-            return {}
-        result = {}
-        for item in data.get("diff", []):
-            code = item.get("f12", "")
-            if not code:
-                continue
-            result[code] = {
-                "price": item.get("f2", 0) if item.get("f2") else None,
-                "high_52": item.get("f51", 0) if item.get("f51") else None,
-                "low_52": item.get("f52", 0) if item.get("f52") else None,
-            }
-        return result
-    except Exception as e:
-        print(f"  批量取价失败: {e}")
-        return {}
+            return None
+        p = data.get("f43")
+        h = data.get("f51")
+        l = data.get("f52")
+        if not l:
+            return None
+        return {
+            "price": p / 100 if p else None,
+            "high_52": h / 100 if h else None,
+            "low_52": l / 100 if l else None,
+        }
+    except:
+        return None
 
 
 def push(title, content):
@@ -58,28 +55,27 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 触发价追溯 v6 {now:%Y-%m-%d}")
+    print(f"[START] 触发价追溯 v7 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
 
     trigger = state.get("trigger", {})
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
-    data = batch_52w(codes)
-    print(f"  获取到 {len(data)}/{len(codes)} 只")
 
-    hit = []
-    never = []
-    no_data = []
+    hit, never, no_data = [], [], []
 
-    for code in codes:
+    for i, code in enumerate(codes):
         t = trigger[code]
-        tp = t.get("trigger_price", 0)
         name = t.get("name", code)
+        tp = t.get("trigger_price", 0)
         if not tp:
             continue
 
-        d = data.get(code)
+        d = get_52w(code)
+        if i % 5 == 4:
+            time.sleep(0.3)
+
         if not d or not d["low_52"]:
             no_data.append((name, tp))
             continue
@@ -94,9 +90,11 @@ def main():
             gap = round((low - tp) / tp * 100, 1)
             never.append((name, tp, low, high, gap))
 
+        print(f"  [{i+1}/{len(codes)}] {name} 触{tp} 52低{low}")
+
     lines = [
         f"触发价追溯 {now:%m}.{now:%d}",
-        f"52周高低 vs 触发价 | {len(data)}/{len(codes)}只有数据",
+        f"52周高低 vs 触发价 | {len(hit)+len(never)}/{len(codes)}只有数据",
     ]
 
     if hit:
