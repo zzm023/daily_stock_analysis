@@ -1,7 +1,7 @@
 """
-行业集中度监控 v4
-大分类：金融/消费/制造/科技/资源/基建/其他
-持仓市值 + 框架覆盖 → 分散度一目了然
+行业集中度监控 v5
+标准行业分类：化工/煤炭/电力/工程机械/家电/医药...
+持仓 + 框架可选 → 新买入参考
 """
 import os
 import json
@@ -14,35 +14,33 @@ STATE_FILE = Path(__file__).parent / "framework_state.json"
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-# 大分类
-BIG_SECTOR = {
-    # 金融
-    "600036": "金融", "601601": "金融",
-    # 资源
-    "600188": "资源", "000792": "资源", "002601": "资源", "600299": "资源",
-    "603806": "资源", "601058": "资源",
-    # 基建/公用
-    "600018": "基建公用", "601816": "基建公用", "600900": "基建公用",
-    "600941": "基建公用", "600585": "基建公用", "000429": "基建公用",
-    "603568": "基建公用", "600007": "基建公用",
-    # 制造
-    "000157": "制造", "600031": "制造", "600660": "制造",
-    "600761": "制造", "600309": "制造", "002508": "制造",
-    "002032": "制造", "002884": "制造", "002318": "制造",
-    "603855": "制造", "603508": "制造", "000651": "制造",
-    "600066": "制造", "000333": "制造", "600690": "制造",
-    "000708": "制造",
-    # 科技
-    "600406": "科技", "688187": "科技", "300124": "科技",
-    "002410": "科技", "300627": "科技", "002837": "科技",
-    "300628": "科技", "300832": "科技", "600845": "科技",
-    "002747": "科技",
-    # 消费
-    "600598": "消费", "300498": "消费", "000538": "消费",
-    "603605": "消费", "605098": "消费", "600298": "消费",
-    "603288": "消费", "002027": "消费",
-    # 医药
-    "600161": "医药", "600486": "医药",
+SECTOR = {
+    "600036": "银行", "601601": "保险",
+    "600188": "煤炭",
+    "000792": "化工", "002601": "化工", "600299": "化工",
+    "600309": "化工", "600486": "化工", "603806": "化工",
+    "600900": "电力", "603568": "环保",
+    "600018": "交通运输", "601816": "交通运输", "000429": "交通运输",
+    "600941": "通信", "300628": "通信", "300627": "通信",
+    "600007": "房地产",
+    "000157": "工程机械", "600031": "工程机械", "600761": "工程机械",
+    "002884": "通用设备", "002837": "通用设备", "002318": "钢铁",
+    "000708": "钢铁",
+    "600660": "汽车", "601058": "汽车", "600066": "汽车",
+    "002508": "家电", "002032": "家电", "000651": "家电",
+    "000333": "家电", "600690": "家电",
+    "600406": "电力设备", "603855": "电力设备",
+    "603508": "铁路设备",
+    "600585": "建材",
+    "688187": "半导体", "300124": "工控自动化",
+    "002747": "工控自动化",
+    "002410": "软件", "600845": "软件",
+    "300832": "医疗器械",
+    "600598": "农业", "300498": "农业",
+    "000538": "医药", "600161": "医药",
+    "603605": "化妆品", "605098": "教育",
+    "600298": "食品饮料", "603288": "食品饮料",
+    "002027": "传媒",
 }
 WARN = 30
 
@@ -82,7 +80,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 行业集中度 v4 {now:%Y-%m-%d}")
+    print(f"[START] 行业集中度 v5 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -90,17 +88,15 @@ def main():
     hold = state.get("holdings", {})
     trigger = state.get("trigger", {})
 
-    # 所有代码
     hold_codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
     fw_codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
     all_codes = list(set(hold_codes + fw_codes))
     prices = batch_prices(all_codes)
-
     cash = hold.get("cash", 0)
 
-    # ── 以大类聚合：持仓市值 + 框架股列表 ──
-    sec_hold_mv = {}
-    sec_hold_detail = {}
+    # ── 聚合 ──
+    sec_mv = {}
+    sec_held = {}
     sec_fw = {}
 
     for code, v in hold.items():
@@ -111,69 +107,60 @@ def main():
         shares = v.get("shares", 0)
         price = prices.get(code, 0)
         mv = price * shares if price else cost * shares
-        sec = BIG_SECTOR.get(code, "其他")
-        sec_hold_mv[sec] = sec_hold_mv.get(sec, 0) + mv
+        sec = SECTOR.get(code, "其他")
+        sec_mv[sec] = sec_mv.get(sec, 0) + mv
         pnl = (price - cost) / cost * 100 if cost > 0 and price else 0
-        sec_hold_detail.setdefault(sec, []).append(f"{name} {mv:,.0f} {pnl:+.0f}%")
+        sec_held.setdefault(sec, []).append((name, mv, pnl))
 
     for code, t in trigger.items():
         if not isinstance(t, dict):
             continue
-        sec = BIG_SECTOR.get(code, "其他")
+        sec = SECTOR.get(code, "其他")
         sec_fw.setdefault(sec, []).append(t.get("name", code))
 
-    total_mv = sum(sec_hold_mv.values())
-    total_asset = total_mv + cash
+    total_mv = sum(sec_mv.values())
 
     lines = [f"## 行业集中度 - {now:%m.%d}", "",
-             f"总市值 {total_mv:,.0f} + 现金 {cash:,.0f} = {total_asset:,.0f} | 现金 {cash/total_asset*100:.0f}%", ""]
+             f"总市值 {total_mv:,.0f} + 现金 {cash:,.0f} = {total_mv+cash:,.0f} | 现金 {cash/(total_mv+cash)*100:.0f}%",
+             ""]
 
-    # 按持仓市值排序
-    for sec in sorted(sec_hold_mv, key=sec_hold_mv.get, reverse=True):
-        mv = sec_hold_mv[sec]
+    # 有持仓的行业
+    for sec in sorted(sec_mv, key=sec_mv.get, reverse=True):
+        mv = sec_mv[sec]
         pct = mv / total_mv * 100
         bar = "#" * int(pct / 5) + "-" * (20 - int(pct / 5))
-        warning = " !!超标" if pct > WARN else ""
+        warn = " !!超标" if pct > WARN else ""
 
-        fw_list = sec_fw.get(sec, [])
-        fw_str = f"框架{len(fw_list)}只" if fw_list else ""
-
-        lines.append(f"**{sec}** {pct:.0f}% {bar} {warning}")
-        lines.append(f"> 持仓: {mv:,.0f} | {fw_str}")
-        if sec in sec_hold_detail:
-            for d in sec_hold_detail[sec]:
-                lines.append(f"  - {d}")
-
-        # 列出框架股（未持有）
-        held_names = {v.get("name", "") for v in hold.values() if isinstance(v, dict)}
-        fw_unheld = [n for n in fw_list if n not in held_names]
-        if fw_unheld and len(fw_unheld) <= 20:
-            lines.append(f"  可选: {' / '.join(fw_unheld)}")
-        elif fw_unheld:
-            lines.append(f"  可选: {' / '.join(fw_unheld[:15])} ...等{len(fw_unheld)}只")
+        lines.append(f"**{sec}** {pct:.0f}% {bar} {warn}")
+        for name, m, pnl in sec_held.get(sec, []):
+            lines.append(f"  [{name}]({m:,.0f}, {pnl:+.0f}%)")
         lines.append("")
 
-    # 空大类（无持仓但有框架股）
-    for sec, fw_list in sorted(sec_fw.items(), key=lambda x: len(x[1]), reverse=True):
-        if sec in sec_hold_mv:
-            continue
-        held_names = {v.get("name", "") for v in hold.values() if isinstance(v, dict)}
-        fw_unheld = [n for n in fw_list if n not in held_names]
-        if fw_unheld:
-            lines.append(f"**{sec}** 无持仓 | 框架{len(fw_list)}只")
-            if len(fw_unheld) <= 15:
-                lines.append(f"  可选: {' / '.join(fw_unheld)}")
-            else:
-                lines.append(f"  可选: {' / '.join(fw_unheld[:12])} ...等{len(fw_unheld)}只")
-            lines.append("")
+    # 无持仓但有框架股的行业 → 分散参考
+    held_names = {v.get("name", "") for v in hold.values() if isinstance(v, dict)}
+    lines.append("---")
+    lines.append("### 未持仓行业（框架可选）")
+    lines.append("")
 
-    # 告警
-    over = [(s, sec_hold_mv[s]/total_mv*100) for s in sec_hold_mv if sec_hold_mv[s]/total_mv*100 > WARN]
+    empty = []
+    for sec, fws in sec_fw.items():
+        if sec in sec_mv:
+            continue
+        unheld = [n for n in fws if n not in held_names]
+        if unheld:
+            empty.append((sec, unheld))
+    empty.sort(key=lambda x: -len(x[1]))
+
+    for sec, unheld in empty:
+        lines.append(f"**{sec}** 框架{len(unheld)}只: {', '.join(unheld)}")
+
+    over = [(s, sec_mv[s]/total_mv*100) for s in sec_mv if sec_mv[s]/total_mv*100 > WARN]
     if over:
+        lines.append("")
         lines.append(f"> {WARN}%超标: " + ", ".join(f"{s}{p:.0f}%" for s, p in over))
 
     push(f"行业集中度 {now:%m.%d}", "\n".join(lines))
-    print(f"[DONE] {len(sec_hold_mv)}类有持仓")
+    print(f"[DONE] {len(sec_mv)}行业有持仓")
 
 
 if __name__ == "__main__":
