@@ -1,6 +1,6 @@
 """
-行业集中度监控 v2
-修复：正则批量取价 + 补全行业标签
+行业集中度监控 v3
+修复：行业名简化 + 龙佰→钛白粉
 """
 import os
 import json
@@ -34,35 +34,27 @@ SECTOR = {
     # 持仓补充
     "600845": "工业软件", "002747": "机器人",
 }
-
-CONCENTRATION_WARNING = 30
-CONCENTRATION_DANGER = 40
+WARN = 30
 
 
 def batch_prices(codes):
     prices = {}
     for i in range(0, len(codes), 40):
         batch = codes[i:i+40]
-        symbols = ",".join(
-            f"sh{c}" if c.startswith("6") else f"sz{c}" for c in batch
-        )
+        symbols = ",".join(f"sh{c}" if c.startswith("6") else f"sz{c}" for c in batch)
         try:
             r = requests.get(f"http://qt.gtimg.cn/q={symbols}", timeout=15)
             r.encoding = "gbk"
             text = r.text
             for c in batch:
                 prefix = "sh" if c.startswith("6") else "sz"
-                pattern = f"v_{prefix}{c}=\"[^\"]*\""
-                m = re.search(pattern, text)
+                m = re.search(f"v_{prefix}{c}=\"[^\"]*\"", text)
                 if m:
                     parts = m.group().split("~")
                     if len(parts) >= 4 and parts[3]:
-                        try:
-                            prices[c] = float(parts[3])
-                        except:
-                            pass
-        except Exception as e:
-            print(f"  批量取价失败: {e}")
+                        prices[c] = float(parts[3])
+        except:
+            pass
     return prices
 
 
@@ -80,16 +72,18 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 行业集中度 v2 {now:%Y-%m-%d}")
+    print(f"[START] 行业集中度 v3 {now:%Y-%m-%d}")
 
-    with open(STATE_FILE, "r", encoding="utf-8") as f:
+    with open(STATE_FILE, "r") as f:
         state = json.load(f)
 
     hold = state.get("holdings", {})
-    hold_codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
-    prices = batch_prices(hold_codes)
+    codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
+    prices = batch_prices(codes)
+    cash = hold.get("cash", 0)
 
-    sector_hold = {}
+    sector_mv = {}
+    sector_stocks = {}
     total_mv = 0
 
     for code, v in hold.items():
@@ -99,65 +93,40 @@ def main():
         cost = v.get("cost", 0)
         shares = v.get("shares", 0)
         price = prices.get(code, 0)
-
         mv = price * shares if price else cost * shares
-        total_mv += mv if mv > 0 else 0
+        total_mv += mv
 
-        sector = SECTOR.get(code, "❓未分类")
-        if sector not in sector_hold:
-            sector_hold[sector] = {"mv": 0, "stocks": []}
-        sector_hold[sector]["mv"] += mv
-        sector_hold[sector]["stocks"].append((name, mv, cost, price, shares))
+        sec = SECTOR.get(code, "未分类")
+        sector_mv[sec] = sector_mv.get(sec, 0) + mv
+        sector_stocks.setdefault(sec, [])
 
-    cash = hold.get("cash", 0)
-    total_asset = total_mv + cash
+        if cost < 0:
+            sector_stocks[sec].append(f"  - {name} {mv:,.0f} | 零成本")
+        elif price and cost:
+            pnl = (price - cost) / cost * 100
+            sector_stocks[sec].append(f"  - {name} {mv:,.0f} | {pnl:+.0f}%")
+        else:
+            sector_stocks[sec].append(f"  - {name} {mv:,.0f}")
 
-    warnings = []
-    for sector, data in sector_hold.items():
-        pct = data["mv"] / total_mv * 100 if total_mv else 0
-        if pct >= CONCENTRATION_DANGER:
-            warnings.append(f"🔴 {sector} {pct:.0f}% — >{CONCENTRATION_DANGER}%")
-        elif pct >= CONCENTRATION_WARNING:
-            warnings.append(f"🟡 {sector} {pct:.0f}% — >{CONCENTRATION_WARNING}%")
+    lines = [f"## 行业集中度 - {now:%m.%d}", "",
+             f"总市值 {total_mv:,.0f} + 现金 {cash:,.0f} = {total_mv+cash:,.0f}", ""]
 
-    lines = [f"## 🏭 行业集中度 — {now:%Y.%m.%d}", "",
-             f"{now:%H:%M} | 总市值{total_mv:,.0f} | 涵盖{len(prices)}/{len(hold_codes)}只价", ""]
-
-    lines.append("### 💼 持仓行业")
-    lines.append("")
-    for sector, data in sorted(sector_hold.items(), key=lambda x: x[1]["mv"], reverse=True):
-        pct = data["mv"] / total_mv * 100 if total_mv else 0
-        bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
-        lines.append(f"**{sector}** {pct:.1f}% {bar}")
-        for name, mv, cost, price, shares in data["stocks"]:
-            if cost < 0:
-                lines.append(f"  └ {name} 市值{mv:,.0f} | 零成本")
-            elif cost > 0 and price and price > 0:
-                pnl = (price - cost) / cost * 100
-                lines.append(f"  └ {name} 市值{mv:,.0f} | {pnl:+.0f}%")
-            else:
-                lines.append(f"  └ {name} 市值{mv:,.0f}")
+    for sec, mv in sorted(sector_mv.items(), key=lambda x: x[1], reverse=True):
+        pct = mv / total_mv * 100
+        bar = "#" * int(pct / 5) + "-" * (20 - int(pct / 5))
+        flag = "!!" if pct > WARN else ""
+        lines.append(f"{sec}: {pct:.0f}% {bar} {flag}")
+        for s in sector_stocks[sec]:
+            lines.append(s)
         lines.append("")
 
-    if warnings:
-        lines.append("### ⚠️ 集中度告警")
-        for w in warnings:
-            lines.append(w)
-        lines.append("")
+    # 告警
+    over = [(s, p) for s, p in [(k, sector_mv[k]/total_mv*100) for k in sector_mv] if p > WARN]
+    if over:
+        lines.append(f"> {WARN}% 以上: " + ", ".join(f"{s}{p:.0f}%" for s, p in over))
 
-    # 框架股行业分布
-    fw_by_sector = {}
-    for code, sector in SECTOR.items():
-        fw_by_sector.setdefault(sector, []).append(code)
-
-    lines.append("### 📊 框架股覆盖")
-    for sector, cds in sorted(fw_by_sector.items(), key=lambda x: len(x[1]), reverse=True):
-        lines.append(f"- {sector}：{len(cds)}只")
-    lines.append("")
-    lines.append(f"> {CONCENTRATION_WARNING}%告警 | 未分类=补充标签")
-
-    push(f"🏭 行业集中度 {now:%Y.%m.%d}", "\n".join(lines))
-    print(f"[DONE] {'有告警' if warnings else '无告警'}")
+    push(f"行业集中度 {now:%m.%d}", "\n".join(lines))
+    print(f"[DONE] {len(sector_mv)}行业 {len(prices)}/{len(codes)}价")
 
 
 if __name__ == "__main__":
