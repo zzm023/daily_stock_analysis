@@ -1,0 +1,22 @@
+name: 行业集中度
+
+on:
+  schedule:
+    - cron: '45 8 * * 1'
+  workflow_dispatch:
+
+jobs:
+  sector-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: 行业集中度
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
+        run: python sector_monitor.py
