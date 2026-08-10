@@ -1,6 +1,6 @@
 """
-行业集中度监控 v6
-手机优化：去条形图 / 紧凑排版 / 每行一只
+行业集中度监控 v7
+每个未持仓行业一行 → 每只股票单独一行
 """
 import os
 import json
@@ -79,7 +79,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 行业集中度 v6 {now:%Y-%m-%d}")
+    print(f"[START] 行业集中度 v7 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -119,41 +119,37 @@ def main():
     total_mv = sum(sec_mv.values())
     total_asset = total_mv + cash
 
-    # ── 输出 ──
     lines = [f"# 行业集中度 {now:%m}.{now:%d}",
-             f"总资产 {total_asset/10000:.0f}万 | 持仓 {total_mv/10000:.0f}万 + 现金 {cash/10000:.0f}万 ({cash/total_asset*100:.0f}%)",
+             f"总 {total_asset/10000:.0f}万 | 仓{total_mv/10000:.0f} + 现{cash/10000:.0f}万 ({cash/total_asset*100:.0f}%)",
              ""]
 
-    lines.append("## 持仓行业")
+    lines.append("## 持仓")
     for sec in sorted(sec_mv, key=sec_mv.get, reverse=True):
         mv = sec_mv[sec]
         pct = mv / total_mv * 100
-        flag = "⚠️" if pct > WARN else ""
-        lines.append(f"> **{sec}{flag}** {pct:.0f}% | {mv/10000:.1f}万")
+        flag = " ⚠️" if pct > WARN else ""
+        lines.append(f"**{sec}{flag}** {pct:.0f}% {mv/10000:.1f}万")
         for name, m, pnl in sec_held.get(sec, []):
             lines.append(f"　{m/10000:.1f}万 {name} {pnl:+.0f}%")
     lines.append("")
 
-    # ── 未持仓行业：紧凑 ──
+    lines.append("## 未持仓")
     held_names = {v.get("name", "") for v in hold.values() if isinstance(v, dict)}
-    unheld_groups = []
-    for sec, fws in sec_fw.items():
+    for sec, fws in sorted(sec_fw.items(), key=lambda x: -len(x[1])):
         if sec in sec_mv:
             continue
         unheld = [n for n in fws if n not in held_names]
-        if unheld:
-            unheld_groups.append((sec, unheld))
-
-    if unheld_groups:
-        lines.append("## 未持仓（框架可选）")
-        for sec, unheld in sorted(unheld_groups, key=lambda x: -len(x[1])):
-            lines.append(f"{sec}：{', '.join(unheld)}")
+        if not unheld:
+            continue
+        lines.append(f"**{sec}**")
+        for n in unheld:
+            lines.append(f"　{n}")
         lines.append("")
 
-    lines.append(f"> 超标阈值 {WARN}% | 分散=保护本金")
+    lines.append(f"> 行业>{WARN}%告警")
 
     push(f"行业集中度 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE] {len(sec_mv)}行业")
+    print(f"[DONE]")
 
 
 if __name__ == "__main__":
