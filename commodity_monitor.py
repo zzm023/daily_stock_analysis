@@ -1,348 +1,209 @@
-#!/usr/bin/env python3
 """
-大宗商品价格监控 v9
-联动触发清单：异动时标注是否影响触发清单股票
-数据源：akshare期货 + 100ppi品种子站 ｜ 自动提交状态文件
-每日推送，所有品种显示
+大宗商品价格监控 v3
+数据源：新浪期货 + 生意社现货 | 无 akshare 依赖
+异动写入 framework_state.json → daily_signal.py 联动
 """
-import requests
-import json
 import os
+import json
+import requests
 import re
-import subprocess
 from datetime import datetime, date
 from pathlib import Path
 
 STATE_FILE = Path(__file__).parent / "framework_state.json"
 DATA_FILE = Path(__file__).parent / "commodity_prices.json"
-
-COMMODITY_STOCK_MAP = {
-    "碳酸锂":    ["000792"],
-    "聚合MDI":   ["600309"],
-    "钛白粉":    ["002601"],
-    "蛋氨酸":    ["600299"],
-    "水泥":      ["600585"],
-    "动力煤":    ["600585", "600188"],
-    "氯化钾":    ["000792"],
-    "EVA光伏料": ["603806"],
-    "天然橡胶":  ["601058"],
-}
-
-STOCK_NAMES = {
-    "000792":"盐湖股份","600309":"万华化学","002601":"龙佰集团",
-    "600299":"安迪苏","600585":"海螺水泥","600188":"兖矿能源",
-    "603806":"福斯特","601058":"赛轮轮胎",
-}
-
-COMMODITIES = {
-    "碳酸锂": {
-        "stocks": ["盐湖股份(000792)"], "level": "daily",
-        "unit": "元/吨", "threshold": 0.03,
-        "ak_futures": "LC0",
-    },
-    "聚合MDI": {
-        "stocks": ["万华化学(600309)"], "level": "daily",
-        "unit": "元/吨", "threshold": 0.02,
-        "ppi_sub": "mdi.100ppi.com",
-    },
-    "钛白粉": {
-        "stocks": ["龙佰集团(002601)"], "level": "weekly",
-        "unit": "元/吨", "threshold": 0.02,
-        "ppi_sub": "tio2.100ppi.com",
-    },
-    "蛋氨酸": {
-        "stocks": ["安迪苏(600299)"], "level": "weekly",
-        "unit": "元/公斤", "threshold": 0.03,
-        "ppi_sub": "met.100ppi.com",
-    },
-    "水泥": {
-        "stocks": ["海螺水泥(600585)"], "level": "weekly",
-        "unit": "元/吨", "threshold": 0.02,
-        "ppi_sub": "sn.100ppi.com",
-    },
-    "动力煤": {
-        "stocks": ["海螺水泥(600585)", "兖矿能源(600188)"], "level": "weekly",
-        "unit": "元/吨", "threshold": 0.02,
-        "ppi_sub": "coal.100ppi.com",
-    },
-    "氯化钾": {
-        "stocks": ["盐湖股份(000792)"], "level": "weekly",
-        "unit": "元/吨", "threshold": 0.03,
-        "ppi_sub": "kcl.100ppi.com",
-    },
-    "EVA光伏料": {
-        "stocks": ["福斯特(603806)"], "level": "weekly",
-        "unit": "元/吨", "threshold": 0.02,
-        "ppi_sub": "eva.100ppi.com",
-    },
-    "天然橡胶": {
-        "stocks": ["赛轮轮胎(601058)"], "level": "weekly",
-        "unit": "元/吨", "threshold": 0.02,
-        "ak_futures": "RU0",
-    },
-}
-
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+# 商品配置
+COMMODITIES = {
+    "碳酸锂": {
+        "stocks": ["000792"], "level": "daily", "unit": "元/吨",
+        "threshold": 0.03, "source": "sina_futures", "code": "LC0",
+    },
+    "聚合MDI": {
+        "stocks": ["600309"], "level": "daily", "unit": "元/吨",
+        "threshold": 0.02, "source": "100ppi", "ppid": "264",
+    },
+    "钛白粉(金红石型)": {
+        "stocks": ["002601"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "source": "100ppi", "ppid": "764",
+    },
+    "蛋氨酸": {
+        "stocks": ["600299"], "level": "weekly", "unit": "元/公斤",
+        "threshold": 0.03, "source": "100ppi", "ppid": "843",
+    },
+    "PO42.5水泥": {
+        "stocks": ["600585"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "source": "100ppi", "ppid": "308",
+    },
+    "动力煤(5500大卡)": {
+        "stocks": ["600585", "600188"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "source": "100ppi", "ppid": "345",
+    },
+    "氯化钾": {
+        "stocks": ["000792"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.03, "source": "100ppi", "ppid": "389",
+    },
+    "EVA光伏料": {
+        "stocks": ["603806"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "source": "100ppi", "ppid": "1139",
+    },
+    "天然橡胶": {
+        "stocks": ["601058"], "level": "weekly", "unit": "元/吨",
+        "threshold": 0.02, "source": "sina_futures", "code": "RU0",
+    },
 }
 
 
-def load_state():
-    if STATE_FILE.exists():
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"trigger": {}, "holdings": {}}
-
-
-def save_state(s):
-    s["meta"] = s.get("meta", {})
-    s["meta"]["updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(s, f, ensure_ascii=False, indent=2)
-
-
-def git_commit_state():
+def get_sina_futures(code):
+    """新浪期货连续合约"""
     try:
-        subprocess.run(["git", "config", "user.name", "GitHub Action"], check=True)
-        subprocess.run(["git", "config", "user.email", "action@github.com"], check=True)
-        subprocess.run(["git", "add", "framework_state.json"], check=True)
-        result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
-        if result.returncode != 0:
-            subprocess.run(["git", "commit", "-m", "[auto] 更新商品事件"], check=True)
-            subprocess.run(["git", "push"], check=True)
-            print("[GIT] framework_state.json 已提交")
+        r = requests.get(f"https://hq.sinajs.cn/list={code}",
+                         headers={"Referer": "https://finance.sina.com.cn"}, timeout=8)
+        r.encoding = "gbk"
+        text = r.text
+        if "=" not in text:
+            return None
+        data = text.split('"')[1].split(",") if '"' in text else text.split(",")[1:]
+        if len(data) < 6 or not data[0]:
+            return None
+        price = float(data[3]) if data[3] else float(data[1]) if data[1] else 0
+        prev = float(data[4]) if data[4] and data[4] != "0.000" else price
+        change_pct = (price - prev) / prev * 100 if prev and prev > 0 else 0
+        return {"price": price, "date": str(date.today()), "change_pct": change_pct}
     except Exception as e:
-        print(f"[GIT] 提交失败: {e}")
-
-
-def get_akshare_futures(code):
-    try:
-        import akshare as ak
-        for func_name in ["futures_zh_daily_sina", "futures_zh_daily"]:
-            try:
-                func = getattr(ak, func_name)
-                df = func(symbol=code)
-                if df is None or len(df) == 0:
-                    continue
-                for orig in df.columns:
-                    if "收" in orig or orig.lower() in ("close", "f_close"):
-                        val = float(df.iloc[-1][orig])
-                        if val > 0:
-                            return {"price": val, "date": str(date.today()), "change_pct": None}
-                row = df.iloc[-1]
-                for orig in df.columns:
-                    try:
-                        v = float(row[orig])
-                        if 10 < v < 10000000:
-                            return {"price": v, "date": str(date.today()), "change_pct": None}
-                    except:
-                        continue
-            except Exception:
-                continue
-    except Exception as e:
-        print(f"    [akshare] {code}: {e}")
+        print(f"  [新浪期货] {code} 失败: {e}")
     return None
 
 
-def get_ppi_sub_price(subdomain, keyword):
+def get_100ppi(ppid, name):
+    """生意社现货价格"""
     try:
-        url = f"https://{subdomain}/news/list---1.html"
-        resp = requests.get(url, headers=HEADERS, timeout=20)
-        resp.encoding = "utf-8"
-        html = resp.text
-        pat = rf'基准价[为是](\d+[\.\d]*)元'
-        matches = re.findall(pat, html)
-        if matches:
-            for m in matches:
-                p = float(m)
-                if 100 < p < 10000000:
-                    return {"price": p, "date": str(date.today()), "change_pct": None}
-        pat2 = r'(\d{4,7}\.\d{2})\s*元/[吨公斤]'
-        matches2 = re.findall(pat2, html)
-        for m in matches2:
-            p = float(m)
-            if 100 < p < 500000:
-                idx = html.find(m)
-                ctx = html[max(0,idx-300):idx+100]
-                if keyword in ctx or "基准价" in ctx or "报价" in ctx:
-                    return {"price": p, "date": str(date.today()), "change_pct": None}
-        print(f"    [子站] {subdomain} 未匹配价格")
+        url = f"https://www.100ppi.com/price/detail-{ppid}.html"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r.encoding = "utf-8"
+        text = r.text
+        patterns = [
+            r'<span class="price"[^>]*>(\d+[\.\d]*)</span>',
+            r'最新价格[：:]\s*(\d+[\.\d]*)',
+            r'参考价[：:]\s*(\d+[\.\d]*)',
+            r'<td[^>]*class="[^"]*price[^"]*"[^>]*>(\d+[\.\d]*)</td>',
+        ]
+        for pat in patterns:
+            m = re.search(pat, text)
+            if m:
+                return {"price": float(m.group(1)), "date": str(date.today()), "change_pct": 0}
+        print(f"  [100ppi] {name}({ppid}) 未匹配到价格")
     except Exception as e:
-        print(f"    [子站] {subdomain} 异常: {e}")
+        print(f"  [100ppi] {name}({ppid}) 失败: {e}")
     return None
 
 
-def get_commodity_price(name, cfg):
-    if "ak_futures" in cfg:
-        result = get_akshare_futures(cfg["ak_futures"])
-        if result:
-            print(f"    [akshare] ✅")
-            return result
-    if "ppi_sub" in cfg:
-        kw = name.split("(")[0]
-        result = get_ppi_sub_price(cfg["ppi_sub"], kw)
-        if result:
-            print(f"    [100ppi] ✅")
-            return result
+def get_price(name, cfg):
+    if cfg["source"] == "sina_futures":
+        return get_sina_futures(cfg["code"])
+    elif cfg["source"] == "100ppi":
+        return get_100ppi(cfg["ppid"], name)
     return None
-
-
-def load_history():
-    if DATA_FILE.exists():
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def save_history(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def push(title, content):
-    if not PUSHPLUS_TOKEN:
-        return
+    if not PUSHPLUS_TOKEN: return
     try:
         payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
         if PUSHPLUS_TOPIC:
             payload["topic"] = PUSHPLUS_TOPIC
         r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=10)
-        print(f"  [PushPlus] {'✅' if r.json().get('code')==200 else r.json()}")
+        print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
     except Exception as e:
-        print(f"  [PushPlus] {e}")
-
-
-def should_check_today(cfg):
-    if cfg.get("level") == "daily":
-        return True
-    return datetime.now().weekday() == 0
+        print(f"[PushPlus] {e}")
 
 
 def main():
-    today = datetime.now()
-    wd = ['一','二','三','四','五','六','日']
-    is_monday = today.weekday() == 0
-    print(f"=== 大宗商品监控 v9 | {today:%Y-%m-%d %H:%M} 周{wd[today.weekday()]} ===")
+    now = datetime.now()
+    weekday = now.weekday()
+    print(f"[START] 大宗商品监控 v3 {now:%Y-%m-%d %H:%M} 周{'一二三四五六日'[weekday]}")
 
-    state = load_state()
-    trigger = state.get("trigger", {})
+    history = {}
+    if DATA_FILE.exists():
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            history = json.load(f)
 
-    trigger_codes = {c for c, v in trigger.items() if v.get("status") in ("已触发","接近")}
-    print(f"  触发清单: {len(trigger_codes)} 只 → {[STOCK_NAMES.get(c,c) for c in trigger_codes]}")
-
-    history = load_history()
-    alerts, all_rows = [], []
-    all_data, ok, fail = {}, 0, 0
-    commodity_events = []
+    alerts = []
+    snapshot = {}
 
     for name, cfg in COMMODITIES.items():
-        if not should_check_today(cfg):
-            cached = history.get(name, {})
-            if cached:
-                all_data[name] = cached
-                all_rows.append((name, cached.get("price",0), cfg["unit"],
-                                 ", ".join(cfg["stocks"]), cached.get("change_pct"), cfg["threshold"]))
+        # 非周一跳过周度商品
+        if cfg["level"] == "weekly" and weekday != 0:
+            snapshot[name] = history.get(name, {})
             continue
 
-        print(f"\n[{name}] ...")
-        result = get_commodity_price(name, cfg)
+        print(f"\n  [{name}] ...")
+        result = get_price(name, cfg)
         if result is None:
-            print(f"  ❌ 失败")
-            fail += 1
-            cached = history.get(name, {})
-            all_data[name] = cached
-            if cached:
-                all_rows.append((name, cached.get("price",0), cfg["unit"],
-                                 ", ".join(cfg["stocks"]), cached.get("change_pct"), cfg["threshold"]))
+            snapshot[name] = history.get(name, {})
             continue
 
-        ok += 1
-        np_ = result["price"]
-        old = history.get(name, {}).get("price")
-        chg = None
-        if old and old > 0:
-            chg = round((np_ - old) / old, 4)
-            d = "↑" if chg>0 else "↓" if chg<0 else "→"
-            print(f"  ✅ {np_:,.0f} {cfg['unit']} | {d} {abs(chg)*100:.1f}%")
+        new_price = result["price"]
+        old = history.get(name, {})
+        old_price = old.get("price")
+
+        chg_str = ""
+        if old_price and old_price > 0:
+            chg = (new_price - old_price) / old_price
+            chg_str = f" {chg*100:+.1f}%"
             if abs(chg) >= cfg["threshold"]:
-                affected_codes = COMMODITY_STOCK_MAP.get(name, [])
-                in_trigger = [c for c in affected_codes if c in trigger_codes]
                 alerts.append({
-                    "name":name,"price":np_,"old_price":old,"change_pct":chg,
-                    "stocks":cfg["stocks"],"unit":cfg["unit"],
-                    "in_trigger": in_trigger
+                    "name": name, "price": new_price, "old_price": old_price,
+                    "change_pct": round(chg * 100, 1),
+                    "stocks": cfg["stocks"], "unit": cfg["unit"],
                 })
-                commodity_events.append({
-                    "commodity": name,
-                    "price": np_,
-                    "old_price": old,
-                    "change_pct": chg,
-                    "stocks": affected_codes,
-                    "in_trigger": in_trigger,
-                    "date": str(date.today())
-                })
-        else:
-            print(f"  ✅ {np_:,.0f} {cfg['unit']}（首次）")
 
-        record = {"price": np_, "date": result["date"], "unit": cfg["unit"],
-                   "stocks": ", ".join(cfg["stocks"]), "_name": name,
-                   "change_pct": chg}
-        all_data[name] = record
-        all_rows.append((name, np_, cfg["unit"], ", ".join(cfg["stocks"]), chg, cfg["threshold"]))
+        snapshot[name] = {"price": new_price, "date": result["date"], "unit": cfg["unit"]}
+        print(f"    {new_price:,.0f} {cfg['unit']}{chg_str}")
 
-    state["commodity_events"] = commodity_events
-    save_state(state)
-    save_history(all_data)
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(snapshot, f, ensure_ascii=False, indent=2)
 
-    print(f"\n{'='*40}\n✅{ok} ❌{fail}")
+    # ── 有告警才推送 ──
+    if not alerts:
+        print("\n[DONE] 无商品异动")
+        return
 
-    lines = [f"## 📦 大宗商品 — {today:%Y.%m.%d}", "",
-             f"> {'周报' if is_monday else '日报'} ｜ 监控9品种 ｜ {today:%m-%d %H:%M}", ""]
+    # ── 写 events 供每日信号联动 ──
+    with open(STATE_FILE, "r", encoding="utf-8") as f:
+        state = json.load(f)
 
-    if alerts:
-        lines.append("### ⚠️ 异动告警")
+    comm_events = []
+    for a in alerts:
+        comm_events.append({
+            "commodity": a["name"],
+            "price": a["price"],
+            "change_str": f"{a['change_pct']:+.1f}%",
+            "stocks": a["stocks"],
+        })
+    state["commodity_events"] = comm_events
+    state["meta"] = state.get("meta", {})
+    state["meta"]["updated"] = now.strftime("%Y-%m-%dT%H:%M:%S")
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+    # ── 推送 ──
+    lines = [f"## ⚡ 商品异动 — {now:%Y.%m.%d}", "",
+             f"{now:%H:%M} | {len(alerts)}项异动", ""]
+    for a in alerts:
+        dir_sign = "📈" if a["change_pct"] > 0 else "📉"
+        stocks_str = ", ".join(a["stocks"])
+        lines.append(
+            f"**{a['name']}** {a['price']:,.0f} {a['unit']} "
+            f"{dir_sign}{a['change_pct']:+.1f}% → {stocks_str}"
+        )
         lines.append("")
-        for a in alerts:
-            dd = "📈" if a["change_pct"]>0 else "📉"
-            trigger_tag = "🔴 命中触发清单" if a["in_trigger"] else "⚪ 不在清单"
-            lines.append(f"**{a['name']}** {dd} {a['change_pct']*100:+.1f}% {trigger_tag}")
-            lines.append(f"> 现价 {a['price']:,.0f} {a['unit']}（上次{a['old_price']:,.0f}）")
-            stock_names = [f"{STOCK_NAMES.get(c,c)}({c})" for c in a.get("in_trigger",[])]
-            if stock_names:
-                lines.append(f"> ⚠️ 影响触发清单：{', '.join(stock_names)}")
-            lines.append("")
-        lines.append("")
+    lines.append("> 📌 已写入 commodity_events，每日信号将联动分析。")
 
-    lines.append("### 📋 全部品种")
-    lines.append("")
-    for name, price, unit, stocks, chg, threshold in all_rows:
-        affected = COMMODITY_STOCK_MAP.get(name, [])
-        hit_trigger = [c for c in affected if c in trigger_codes]
-        tag = " 🔴清单" if hit_trigger else ""
-
-        if chg is not None:
-            arrow = "↑" if chg > 0 else "↓" if chg < 0 else "→"
-            flag = "🔴" if abs(chg) >= threshold else "⚪"
-            change_str = f"{flag} {arrow} {abs(chg)*100:.1f}%"
-        else:
-            change_str = "🆕"
-        lines.append(f"**{name}**{tag} {price:,.0f} {unit} | {change_str}")
-        lines.append(f"> {stocks}")
-        lines.append("")
-
-    lines.append(f"---")
-    lines.append(f"✅{ok} ❌{fail} | {today:%Y-%m-%d %H:%M}")
-
-    title = f"⚡ 商品异动({len(alerts)}项)" if alerts else ("📦 商品周报" if is_monday else "📦 商品日报")
-    push(title, "\n".join(lines))
-
-    git_commit_state()
-    print("\n✅ 完成")
+    push(f"⚡ 商品异动 {now:%Y.%m.%d}", "\n".join(lines))
+    print(f"\n[DONE] {len(alerts)}项异动已推送")
 
 
 if __name__ == "__main__":
