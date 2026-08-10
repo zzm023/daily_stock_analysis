@@ -1,10 +1,11 @@
 """
-持仓损益水印 v3
-修复：sh/sz 分批复用 + 全部持仓显盈亏
+持仓损益水印 v4
+修复：用已知代码前缀匹配 / 加取价debug
 """
 import os
 import json
 import requests
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -14,32 +15,31 @@ PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
 def batch_prices(codes):
-    """按交易所分批复用"""
     prices = {}
-    sh_codes = [c for c in codes if c.startswith("6")]
-    sz_codes = [c for c in codes if not c.startswith("6")]
-
-    for exchange, batch_codes in [("sh", sh_codes), ("sz", sz_codes)]:
-        for i in range(0, len(batch_codes), 40):
-            batch = batch_codes[i:i+40]
-            symbols = ",".join(f"{exchange}{c}" for c in batch)
-            try:
-                r = requests.get(f"http://qt.gtimg.cn/q={symbols}", timeout=15)
-                r.encoding = "gbk"
-                for line in r.text.strip().split("\n"):
-                    if "=" not in line or '""' in line:
-                        continue
-                    # 从行中提取代码
-                    try:
-                        code = line.split("_")[-1].split("=")[0]
-                        code = code.replace("sh", "").replace("sz", "")
-                        parts = line.split("~")
-                        if len(parts) >= 4 and parts[3]:
-                            prices[code] = float(parts[3])
-                    except:
-                        continue
-            except Exception as e:
-                print(f"  批量取价 {exchange} 失败: {e}")
+    for i in range(0, len(codes), 40):
+        batch = codes[i:i+40]
+        symbols = ",".join(
+            f"sh{c}" if c.startswith("6") else f"sz{c}" for c in batch
+        )
+        try:
+            r = requests.get(f"http://qt.gtimg.cn/q={symbols}", timeout=15)
+            r.encoding = "gbk"
+            text = r.text
+            # 用正则找所有 v_sh600036="..." 格式
+            for c in batch:
+                prefix = "sh" if c.startswith("6") else "sz"
+                pattern = f"v_{prefix}{c}=\"[^\"]*\""
+                m = re.search(pattern, text)
+                if m:
+                    parts = m.group().split("~")
+                    if len(parts) >= 4 and parts[3]:
+                        try:
+                            prices[c] = float(parts[3])
+                        except:
+                            pass
+            print(f"  批量取 {len(batch)}: 成功{len([k for k in batch if k in prices])}")
+        except Exception as e:
+            print(f"  批量取价失败: {e}")
     return prices
 
 
@@ -57,7 +57,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 持仓损益 v3 {now:%Y-%m-%d}")
+    print(f"[START] 持仓损益 v4 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -96,7 +96,7 @@ def main():
         pnl_pct = (pnl / cb * 100) if cb else 0
         positions.append({
             "name": name, "pnl_pct": pnl_pct, "pnl_abs": pnl,
-            "mv": mv, "price": price, "cost": cost,
+            "mv": mv, "price": price,
         })
 
     total_asset = total_mv + cash
@@ -109,7 +109,7 @@ def main():
     losers = [p for p in positions if p["pnl_pct"] < 0]
 
     lines = [f"## 💧 持仓损益 — {now:%Y.%m.%d}", "",
-             f"{now:%H:%M}", ""]
+             f"{now:%H:%M} | 获取{len(prices)}/{len(codes)}只价格"]
     lines.append(f"💰 总市值 {total_mv:,.0f} + 现金 {cash:,.0f} = **{total_asset:,.0f}**")
     lines.append(f"📊 总成本 {total_cost:,.0f} | 浮动盈亏 {total_pnl:+,.0f}（{total_pnl_pct:+.1f}%）")
     lines.append(f"🏦 现金 {cash_pct:.0f}%")
@@ -131,7 +131,7 @@ def main():
             lines.append(f"- **{name}** 市值{mv:,.0f} | 纯利润")
 
     push(f"💧 持仓损益 {now:%Y.%m.%d}", "\n".join(lines))
-    print(f"[DONE] {len(gainers)}盈 {len(losers)}亏 总资产{total_asset:,.0f}")
+    print(f"[DONE] {len(gainers)}盈 {len(losers)}亏 价格{len(prices)}/{len(codes)}")
 
 
 if __name__ == "__main__":
