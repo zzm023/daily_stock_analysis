@@ -1,7 +1,7 @@
 """
 季报追踪 v1
 检查持仓+框架股票：即将披露 / 已披露但恶化
-每日 16:45 CST
+数据源：东方财富 API（无 akshare 依赖）
 """
 import os
 import json
@@ -27,7 +27,6 @@ def push(title, content):
 
 
 def get_report_schedule():
-    """东方财富：近期财报披露日程"""
     try:
         url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
         params = {
@@ -49,7 +48,6 @@ def get_report_schedule():
 
 
 def get_financial_summary(code):
-    """东方财富：最新财报关键指标"""
     try:
         url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
         params = {
@@ -82,7 +80,6 @@ def main():
     hold = state.get("holdings", {})
     trigger = state.get("trigger", {})
 
-    # 需要监控的股票：持仓 + 接近触发
     monitor_codes = set()
     for code in hold:
         if code != "cash" and isinstance(hold.get(code), dict):
@@ -93,16 +90,13 @@ def main():
 
     print(f"  监控 {len(monitor_codes)} 只")
 
-    # ── 获取财报日程 ──
     schedules = get_report_schedule()
     code_to_date = {}
     for s in schedules:
         code_to_date[s["SECURITY_CODE"]] = s
 
-    # ── 检查每只 ──
     upcoming = []
     deteriorated = []
-
     cutoff = now + timedelta(days=14)
 
     for code in monitor_codes:
@@ -129,7 +123,6 @@ def main():
             except:
                 pass
 
-        # 查已披露财报
         fin = get_financial_summary(code)
         if fin:
             try:
@@ -144,7 +137,6 @@ def main():
                     rev_yoy = float(rev_yoy)
                     profit_yoy = float(profit_yoy)
 
-                    # 恶化判定
                     issues = []
                     if profit < 0:
                         issues.append("由盈转亏")
@@ -164,12 +156,10 @@ def main():
             except:
                 pass
 
-    # ── 无变化则不推送 ──
     if not upcoming and not deteriorated:
         print("[DONE] 无新报告日程，无恶化")
         return
 
-    # ── 组装推送 ──
     lines = [f"## 📊 季报追踪 — {now:%Y.%m.%d}", "",
              f"{now:%H:%M} | 监控{len(monitor_codes)}只", ""]
 
@@ -188,18 +178,6 @@ def main():
             lines.append(f"> 营收同比{d['rev_yoy']} | 利润同比{d['profit_yoy']}")
             lines.append(f"> ⚠️ {', '.join(d['issues'])}")
             lines.append("")
-
-        # 写入 events 供卖出仪表盘联动
-        for d in deteriorated:
-            state.setdefault("earnings_events", []).append({
-                "code": d["code"],
-                "name": d["name"],
-                "date": d["report_date"],
-                "desc": f"利润同比{d['profit_yoy']}, 营收同比{d['rev_yoy']}",
-                "type": "财报恶化",
-            })
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
 
     push(f"📊 季报追踪 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"[DONE] 近期披露{len(upcoming)}只 恶化{len(deteriorated)}只")
