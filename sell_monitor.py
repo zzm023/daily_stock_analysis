@@ -1,7 +1,7 @@
 """
-卖出决策仪表盘 v3
-每日联动触发价/估值共振/事件 → 每只持仓独立评分 → LLM分析 → 推送
-非卖信号，是综合数据参考
+卖出决策仪表盘 v4
+每日联动触发价/估值共振/事件 → 每只持仓独立评分 → 推送
+纯文本格式，手机友好，按评分分组，含成本息率/现价息率
 """
 import os
 import json
@@ -31,7 +31,6 @@ def get_price(code):
 
 
 def get_valuation(code):
-    """腾讯API: PE=parts[39] PB=parts[43]"""
     prefix = "sh" if code.startswith("6") else "sz"
     try:
         r = requests.get(f"http://qt.gtimg.cn/q={prefix}{code}", timeout=8)
@@ -44,34 +43,6 @@ def get_valuation(code):
         return pe, pb
     except:
         return 0, 0
-
-
-def get_hist_low(code):
-    prefix = "sh" if code.startswith("6") else "sz"
-    try:
-        r = requests.get(f"https://hq.sinajs.cn/list={prefix}{code}",
-                         headers={"Referer": "https://finance.sina.com.cn"}, timeout=8)
-        r.encoding = "gbk"
-        m = r.text.split(",")
-        if len(m) > 32 and m[32]:
-            return float(m[32])
-    except:
-        pass
-    return 0
-
-
-def get_hist_high(code):
-    prefix = "sh" if code.startswith("6") else "sz"
-    try:
-        r = requests.get(f"https://hq.sinajs.cn/list={prefix}{code}",
-                         headers={"Referer": "https://finance.sina.com.cn"}, timeout=8)
-        r.encoding = "gbk"
-        m = r.text.split(",")
-        if len(m) > 44 and m[44]:
-            return float(m[44])
-    except:
-        pass
-    return 0
 
 
 def call_llm(prompt):
@@ -96,7 +67,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 卖出决策仪表盘 v3 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 卖出仪表盘 v4 {now:%Y-%m-%d %H:%M}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -106,14 +77,9 @@ def main():
     events = state.get("events_daily", [])
     earnings = state.get("earnings_events", [])
 
-    rows = []
-    high_score_stocks = []
-
-    prices = {}
-    for code, v in hold.items():
-        if code == "cash" or not isinstance(v, dict):
-            continue
-        prices[code] = get_price(code)
+    high_alert = []
+    normal = []
+    zero_cost = []
 
     for code, v in hold.items():
         if code == "cash" or not isinstance(v, dict):
@@ -121,16 +87,12 @@ def main():
 
         name = v.get("name", code)
         cost = v.get("cost", 0)
-        shares = v.get("shares", 0)
 
         if cost < 0:
-            rows.append({
-                "name": name, "price": 0, "cost": cost,
-                "pnl": "∞", "alerts": "零成本·永持", "score": 0
-            })
+            zero_cost.append(f"**{name}** | 负成本·永久持有")
             continue
 
-        price = prices.get(code, 0)
+        price = get_price(code)
         if price == 0:
             continue
 
@@ -147,20 +109,19 @@ def main():
 
         pe_upper = t.get("pe_upper") or 0
         pb_lower = t.get("pb_lower") or 0
-        resonance = t.get("resonance", "")
+        dps = t.get("dps", 0)
 
-        low = get_hist_low(code)
-        high = get_hist_high(code)
-        reb_from_low = round((price - low) / low * 100, 1) if low > 0 else None
-        dist_to_high = round((high - price) / high * 100, 1) if high > 0 else None
+        cost_yld = dps / cost * 100 if dps and cost else 0
+        cur_yld = dps / price * 100 if dps and price else 0
 
+        # ── 评分 ──
         score = 0
         alerts = []
 
         if pnl_pct >= 100:
-            score += 4; alerts.append("翻倍")
+            score += 4; alerts.append("🔴翻倍")
         elif pnl_pct >= 50:
-            score += 2; alerts.append("+50%")
+            score += 2; alerts.append("🟠+50%")
 
         if pe_now and pe_upper:
             pe_ratio = pe_now / pe_upper
@@ -168,21 +129,11 @@ def main():
                 score += 3; alerts.append(f"PE{pe_ratio:.1f}x")
             elif pe_ratio >= 1.8:
                 score += 1; alerts.append(f"PE{pe_ratio:.1f}x")
-        else:
-            pe_ratio = None
 
         if pb_now and pb_lower:
             pb_ratio = pb_now / pb_lower
             if pb_ratio >= 3:
                 score += 2; alerts.append(f"PB{pb_ratio:.1f}x")
-
-        if reb_from_low and reb_from_low >= 150:
-            score += 3; alerts.append(f"反弹{reb_from_low:.0f}%")
-        elif reb_from_low and reb_from_low >= 80:
-            score += 1; alerts.append(f"反弹{reb_from_low:.0f}%")
-
-        if dist_to_high and dist_to_high <= 5 and high > 0:
-            score += 2; alerts.append("近新高")
 
         stock_earnings = [e for e in earnings if code in str(e)]
         stock_events = [e for e in events if code in str(e)]
@@ -191,84 +142,93 @@ def main():
         elif stock_events:
             score += 1; alerts.append("事件")
 
-        dps = t.get("dps", 0)
-        if dps and price:
-            cur_yld = dps / price * 100
-            if cur_yld < 1.5:
-                score += 2; alerts.append(f"息枯{cur_yld:.1f}%")
+        if cur_yld and cur_yld < 1.5:
+            score += 2; alerts.append(f"息枯{cur_yld:.1f}%")
 
         alert_str = " ".join(alerts) if alerts else "—"
 
-        rows.append({
-            "name": name, "code": code, "price": price, "cost": cost,
-            "pnl": f"{pnl_pct:+.1f}%",
-            "to_double": f"{to_double:.0f}%",
-            "pe_now": pe_now,
-            "pb_now": pb_now,
-            "reb_low": f"{reb_from_low:.0f}%" if reb_from_low else "?",
-            "dist_high": f"-{dist_to_high:.0f}%" if dist_to_high else "?",
-            "resonance": resonance,
-            "alerts": alert_str,
-            "score": score,
-            "dps": dps,
-            "cost_yld": f"{dps/cost*100:.1f}%" if dps and cost else "?",
-            "cur_yld": f"{dps/price*100:.1f}%" if dps and price else "?"
-        })
+        # ── 组装行 ──
+        pe_s = f"PE{pe_now:.1f}" if pe_now else "PE?"
+        pb_s = f"PB{pb_now:.2f}" if pb_now else "PB?"
+        yld_s = f"成本息率{cost_yld:.1f}% 现价息率{cur_yld:.1f}%" if dps else ""
+        pe_expand = f"(锚≤{pe_upper}→膨胀{pe_now/pe_upper:.1f}x)" if pe_now and pe_upper else ""
+        pb_expand = f"(锚≤{pb_lower}→膨胀{pb_now/pb_lower:.1f}x)" if pb_now and pb_lower else ""
+
+        line = (
+            f"**{name}** {price:.2f} | 成本{cost:.2f} | 盈亏{pnl_pct:+.1f}% | 翻倍还需{to_double:.0f}%\n"
+            f"> {pe_s}{pe_expand} {pb_s}{pb_expand}\n"
+        )
+        if yld_s:
+            line += f"> {yld_s}\n"
+        if alert_str != "—":
+            line += f"> → {alert_str}\n"
+
+        entry = {"line": line, "score": score, "alert": alert_str, "name": name,
+                 "price": price, "cost": cost, "pnl": f"{pnl_pct:+.1f}%",
+                 "pe_now": pe_now, "pb_now": pb_now}
 
         if score >= LLM_THRESHOLD:
-            high_score_stocks.append(rows[-1])
+            high_alert.append(entry)
+        else:
+            normal.append(entry)
 
-        print(f"  {name}: 盈亏{pnl_pct:+.1f}% PE{pe_now:.1f} PB{pb_now:.2f} "
-              f"反弹{reb_from_low}% 评分{score} → {alert_str}")
+        print(f"  {name}: 盈亏{pnl_pct:+.1f}% PE{pe_now:.1f} PB{pb_now:.2f} 评分{score} {alert_str}")
 
-    rows.sort(key=lambda x: x["score"], reverse=True)
-
+    # ── 组装推送 ──
     lines = [f"## 📋 卖出仪表盘 — {now:%Y.%m.%d}", "",
-             f"{now:%H:%M} | 持仓{len(rows)}只 | 事件{len(events)}条", "",
-             "| 股票 | 现价 | 盈亏 | 翻倍还需 | PE | PB | 反弹 | 离新高 | 信号 |",
-             "|------|------|------|----------|----|----|------|--------|------|"]
+             f"{now:%H:%M} | 持仓{len(high_alert)+len(normal)+len(zero_cost)}只", ""]
 
-    for r in rows:
-        if r.get("pnl") == "∞":
-            lines.append(f"| {r['name']} | — | ∞ | — | — | — | — | — | 零成本·永持 |")
-            continue
-        pe_s = f"{r['pe_now']:.1f}" if r['pe_now'] else "?"
-        pb_s = f"{r['pb_now']:.2f}" if r['pb_now'] else "?"
-        lines.append(
-            f"| {r['name']} | {r['price']:.2f} | {r['pnl']} | {r['to_double']} | "
-            f"{pe_s} | {pb_s} | {r['reb_low']} | {r['dist_high']} | {r['alerts']} |"
-        )
-    lines.append("")
-
-    if high_score_stocks:
-        lines.append(f"### ⚠️ 卖出信号活跃（{len(high_score_stocks)}只评分≥{LLM_THRESHOLD}）")
+    # 高分预警
+    if high_alert:
+        high_alert.sort(key=lambda x: x["score"], reverse=True)
+        lines.append(f"### ⚠️ 需关注（评分≥{LLM_THRESHOLD}）")
         lines.append("")
-        for hs in high_score_stocks:
-            lines.append(f"**{hs['name']}** 盈亏{hs['pnl']} PE{hs['pe_now']:.1f} PB{hs['pb_now']:.2f} → {hs['alerts']}")
-        lines.append("")
+        for e in high_alert:
+            lines.append(e["line"])
 
+    # 正常持有
+    if normal:
+        normal.sort(key=lambda x: x["score"], reverse=True)
+        lines.append("### 📎 正常持有")
+        lines.append("")
+        for e in normal:
+            lines.append(e["line"])
+
+    # 零成本
+    if zero_cost:
+        lines.append("### 🏆 零成本·永持")
+        lines.append("")
+        for z in zero_cost:
+            lines.append(z)
+            lines.append("")
+
+    # LLM分析
+    if high_alert:
+        lines.append("---")
         llm_input = "\n".join([
-            "以下持仓触发卖出信号，按长线框架分析每只：",
+            "以下持仓触发卖出信号，按长线框架分析：",
             "",
-            *[f"{h['name']} 成本{h['cost']:.2f} 现价{h['price']:.2f} "
-              f"盈亏{h['pnl']} PE{h['pe_now']:.1f} PB{h['pb_now']:.2f} "
-              f"信号:{h['alerts']}" for h in high_score_stocks],
+            *[f"{e['name']} 成本{e['cost']:.2f} 现价{e['price']:.2f} "
+              f"盈亏{e['pnl']} PE{e['pe_now']:.1f} PB{e['pb_now']:.2f} "
+              f"→ {e['alert']}" for e in high_alert],
             "",
-            "规则：买垄断等破产价，收租为主。卖出=生意不再便宜或基本面恶化。",
-            "逐只分析：该考虑卖出吗？理由和风险。不替用户做决定。",
+            "规则：买垄断等破产价。卖出=生意不再便宜或基本面恶化。",
+            "逐只分析是否该考虑卖出。不替用户做决定。",
         ])
         llm_result = call_llm(llm_input)
         if llm_result:
-            lines.append("### 🤖 综合卖出分析")
+            lines.append("")
+            lines.append("### 🤖 卖出分析")
             lines.append("")
             lines.append(llm_result)
             lines.append("")
-        lines.append("> 📌 数据参考，最终卖出由你判断。")
+        lines.append("📌 数据参考，最终卖出由你判断。")
     else:
-        lines.append(f"> ✅ 无卖出信号。所有持仓评分 < {LLM_THRESHOLD}。保持持有。")
+        lines.append("")
+        lines.append(f"✅ 所有持仓评分<{LLM_THRESHOLD}，无卖出信号。保持持有。")
 
     push(f"📋 卖出仪表盘 {now:%Y.%m.%d}", "\n".join(lines))
-    print(f"[DONE] {len(high_score_stocks)}只触发卖出信号")
+    print(f"[DONE] {len(high_alert)}只触发卖出信号")
 
 
 if __name__ == "__main__":
