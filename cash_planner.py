@@ -1,6 +1,6 @@
 """
-现金规划器 v3
-纯数字格式 / pushplus友好 / 超限高亮
+现金规划器 v4
+动态总资产 = 市值 + 现金
 """
 import os, json, requests, re
 from datetime import datetime
@@ -76,14 +76,13 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 现金规划器 v3 {now:%Y-%m-%d}")
+    print(f"[START] 现金规划器 v4 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
 
     hold = state.get("holdings", {})
-    total_capital = state.get("meta", {}).get("total_capital", 600000)
-    cash = hold.get("cash", total_capital * 0.5)
+    cash = hold.get("cash", 0)
 
     hold_codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
     prices = batch_prices(hold_codes)
@@ -103,10 +102,11 @@ def main():
         attr_stocks.setdefault(a, []).append(f"{name} {mv/10000:.1f}万")
 
     total_mv = sum(attr_mv.values())
+    total_capital = total_mv + cash
 
     lines = [
         f"现金规划 {now:%m}.{now:%d}",
-        f"总{(total_mv+cash)/10000:.0f}万 | 仓{total_mv/10000:.0f} | 现{cash/10000:.0f}万",
+        f"总{total_capital/10000:.0f}万 | 仓{total_mv/10000:.0f} | 现{cash/10000:.0f}万",
     ]
 
     for a, cap_pct in sorted(CAPS.items(), key=lambda x: x[1], reverse=True):
@@ -120,12 +120,9 @@ def main():
             line = f"> **{a}** {used/10000:.1f}万/{cap/10000:.0f}万 满仓"
         else:
             line = f"> **{a}** {used/10000:.1f}万/{cap/10000:.0f}万 {pct_used:.0f}% 余{remain/10000:.1f}万"
-
         lines.append(line)
-
-        if a in attr_stocks:
-            for s in attr_stocks[a]:
-                lines.append(f"  {s}")
+        for s in attr_stocks.get(a, []):
+            lines.append(f"  {s}")
         lines.append("")
 
     empty = [a for a, c in CAPS.items() if a not in attr_mv]
