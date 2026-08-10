@@ -13,7 +13,7 @@
       "gap_pct": 16.28,
       "status": "远离",
       "pe_upper": 8,
-      "pb_lower": 0.8
+      "pb_lower": 1.0
     },
     "601601": {
       "name": "中国太保",
@@ -24,7 +24,7 @@
       "gap_pct": 3.9,
       "status": "接近",
       "pe_upper": 8,
-      "pb_lower": 0.7,
+      "pb_lower": 1.0,
       "pe_now": 5.6,
       "pb_now": 1.59,
       "resonance": "🟢 双振",
@@ -97,7 +97,7 @@
       "gap_pct": 6.09,
       "status": "接近",
       "pe_upper": 20,
-      "pb_lower": 2.0,
+      "pb_lower": 2.5,
       "pe_now": 17.9,
       "pb_now": 2.74,
       "resonance": "🟢 双振",
@@ -115,7 +115,7 @@
       "gap_pct": 8.34,
       "status": "接近",
       "pe_upper": 20,
-      "pb_lower": 2.5,
+      "pb_lower": 3.0,
       "pe_now": 16.6,
       "pb_now": 3.44,
       "resonance": "🟢 双振",
@@ -155,7 +155,7 @@
       "gap_pct": 3.14,
       "status": "接近",
       "pe_upper": 15,
-      "pb_lower": 1.1,
+      "pb_lower": 1.5,
       "pe_now": 14.4,
       "pb_now": 2.08,
       "resonance": "🟡 仅价格",
@@ -195,7 +195,7 @@
       "gap_pct": 39.94,
       "status": "远离",
       "pe_upper": 12,
-      "pb_lower": 0.8
+      "pb_lower": 1.2
     },
     "002601": {
       "name": "龙佰集团",
@@ -206,7 +206,7 @@
       "gap_pct": 22.3,
       "status": "远离",
       "pe_upper": 18,
-      "pb_lower": 1.5
+      "pb_lower": 2.0
     },
     "600299": {
       "name": "安迪苏",
@@ -239,7 +239,7 @@
       "gap_pct": 6.87,
       "status": "接近",
       "pe_upper": 9,
-      "pb_lower": 1.5,
+      "pb_lower": 1.8,
       "pe_now": 7.8,
       "pb_now": 1.95,
       "resonance": "🟡 仅价格",
@@ -268,7 +268,7 @@
       "gap_pct": 25.71,
       "status": "远离",
       "pe_upper": 14,
-      "pb_lower": 2.0
+      "pb_lower": 2.5
     },
     "600690": {
       "name": "海尔智家",
@@ -279,7 +279,7 @@
       "gap_pct": 11.3,
       "status": "远离",
       "pe_upper": 13,
-      "pb_lower": 1.5
+      "pb_lower": 1.8
     },
     "600031": {
       "name": "三一重工",
@@ -290,7 +290,7 @@
       "gap_pct": 16.18,
       "status": "远离",
       "pe_upper": 18,
-      "pb_lower": 1.2
+      "pb_lower": 1.5
     },
     "600309": {
       "name": "万华化学",
@@ -301,7 +301,7 @@
       "gap_pct": 14.28,
       "status": "远离",
       "pe_upper": 20,
-      "pb_lower": 2.0
+      "pb_lower": 2.5
     },
     "600660": {
       "name": "福耀玻璃",
@@ -312,7 +312,7 @@
       "gap_pct": 12.36,
       "status": "远离",
       "pe_upper": 15,
-      "pb_lower": 2.5
+      "pb_lower": 3.0
     },
     "600761": {
       "name": "安徽合力",
@@ -323,7 +323,7 @@
       "gap_pct": 5.58,
       "status": "接近",
       "pe_upper": 15,
-      "pb_lower": 1.5,
+      "pb_lower": 1.8,
       "pe_now": 12.8,
       "pb_now": 2.44,
       "resonance": "🟡 仅价格",
@@ -341,7 +341,7 @@
       "gap_pct": 7.04,
       "status": "接近",
       "pe_upper": 20,
-      "pb_lower": 2.5,
+      "pb_lower": 3.0,
       "pe_now": 17.9,
       "pb_now": 3.72,
       "resonance": "🟡 仅价格",
@@ -381,7 +381,7 @@
       "gap_pct": 3.78,
       "status": "接近",
       "pe_upper": 14,
-      "pb_lower": 1.5,
+      "pb_lower": 1.8,
       "pe_now": 11.7,
       "pb_now": 2.02,
       "resonance": "🟡 仅价格",
@@ -486,7 +486,7 @@
       "gap_pct": 11.39,
       "status": "远离",
       "pe_upper": 14,
-      "pb_lower": 2.0
+      "pb_lower": 2.5
     },
     "002032": {
       "name": "苏泊尔",
@@ -533,7 +533,7 @@
       "gap_pct": 15.89,
       "status": "远离",
       "pe_upper": 14,
-      "pb_lower": 2.0
+      "pb_lower": 2.5
     },
     "603855": {
       "name": "华荣股份",
@@ -573,7 +573,7 @@
       "gap_pct": 2.36,
       "status": "接近",
       "pe_upper": 15,
-      "pb_lower": 1.5,
+      "pb_lower": 2.0,
       "pe_now": 14.8,
       "pb_now": 2.5,
       "resonance": "🟡 仅价格",
