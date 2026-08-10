@@ -159,7 +159,7 @@ def main():
         return
 
     data_section = build_data_section(state)
-        prompt = data_section + """
+  prompt = data_section + """
 
 严格规则：
 - 只分析上面数据中出现的股票，禁止提到任何未列出的股票名称
