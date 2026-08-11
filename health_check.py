@@ -1,7 +1,6 @@
 """
-持仓九宫格体检 v1
-一屏：PE / 利润增速 / 距触发价% / 分红 / 仓位% / 健康评分
-数据源：腾讯 PE/PB + 东财增速 + 手工分红 + 触发价
+持仓九宫格 v2
+紧凑文本 + 放宽超时 + 东财重试
 """
 import os
 import json
@@ -15,7 +14,6 @@ STATE_FILE = Path(__file__).parent / "framework_state.json"
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-# 分红兜底
 DIV_FALLBACK = {
     "002027": 0.33, "600690": 0.38, "000708": 0.55,
     "600845": 0.50, "000157": 0.16, "002601": 0.40,
@@ -24,7 +22,6 @@ DIV_FALLBACK = {
 
 
 def batch_tencent(codes):
-    """腾讯批量 → {code: {price, pe, pb}}"""
     results = {}
     for i in range(0, len(codes), 30):
         batch = codes[i:i+30]
@@ -56,15 +53,20 @@ def batch_tencent(codes):
 
 
 def get_growth(code):
-    """东财 → {rev_yoy, profit_yoy}"""
     prefix = "1" if code.startswith("6") else "0"
-    for _ in range(2):
+    for attempt in range(3):
         try:
             r = requests.get(
                 "https://push2.eastmoney.com/api/qt/stock/get",
-                params={"secid": f"{prefix}.{code}", "fields": "f43,f173,f185"},
-                timeout=10,
-                headers={"Referer": "https://quote.eastmoney.com/"}
+                params={
+                    "secid": f"{prefix}.{code}",
+                    "fields": "f43,f173,f185",
+                },
+                timeout=15,
+                headers={
+                    "Referer": "https://quote.eastmoney.com/",
+                    "User-Agent": "Mozilla/5.0",
+                }
             )
             d = r.json().get("data")
             if d and d.get("f43"):
@@ -74,61 +76,18 @@ def get_growth(code):
                 }
         except Exception:
             pass
-        time.sleep(0.5)
+        time.sleep(1.0 if attempt == 0 else 2.0)
     return None
 
 
-def health_score(pe, profit_yoy, dist_pct, div_yield):
-    """综合评分 0-10"""
-    score = 5  # 基准
-
-    # PE：越低越好
-    if pe is not None:
-        if pe < 8:
-            score += 2
-        elif pe < 15:
-            score += 1
-        elif pe > 50:
-            score -= 2
-        elif pe > 30:
-            score -= 1
-
-    # 利润增速
-    if profit_yoy is not None:
-        if profit_yoy > 20:
-            score += 1.5
-        elif profit_yoy > 10:
-            score += 0.5
-        elif profit_yoy < -20:
-            score -= 2
-        elif profit_yoy < -10:
-            score -= 1
-
-    # 距触发价
-    if dist_pct is not None:
-        if dist_pct < 5:
-            score += 1
-        elif dist_pct > 30:
-            score -= 1
-
-    # 股息率
-    if div_yield is not None:
-        if div_yield > 4:
-            score += 1
-        elif div_yield > 2:
-            score += 0.5
-
-    return max(0, min(10, round(score, 1)))
-
-
-def grade(score):
-    if score >= 8:
-        return "🟢优秀"
-    if score >= 6:
-        return "🟡良好"
-    if score >= 4:
-        return "🟠观望"
-    return "🔴警惕"
+def score_emoji(s):
+    if s >= 8:
+        return "🟢"
+    if s >= 6:
+        return "🟡"
+    if s >= 4:
+        return "🟠"
+    return "🔴"
 
 
 def push(title, content):
@@ -152,7 +111,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 持仓九宫格 v1 {now:%Y-%m-%d}")
+    print(f"[START] 持仓九宫格 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -166,13 +125,12 @@ def main():
         if c != "cash" and isinstance(hold.get(c), dict)
     ]
 
-    # 取行情
     quotes = batch_tencent(hold_codes)
     print(f"  行情 {len(quotes)} 只")
 
-    # 算总市值
     total_mv = cash
     rows = []
+
     for code in hold_codes:
         v = hold[code]
         name = v.get("name", code)
@@ -186,87 +144,88 @@ def main():
         mv = price * shares
         total_mv += mv
 
-        # 触发价
-        tp = trigger.get(code, {}).get("trigger_price", 0) if isinstance(trigger.get(code), dict) else 0
+        tp = 0
+        if isinstance(trigger.get(code), dict):
+            tp = trigger[code].get("trigger_price", 0)
 
-        # 距触发价 %
         dist_pct = ((price - tp) / tp * 100) if tp > 0 else None
 
-        # 分红
         dps = DIV_FALLBACK.get(code, 0)
         div_total = shares * dps
         div_yield = (dps / price * 100) if price > 0 and dps > 0 else None
 
-        # 增速
         growth = get_growth(code)
         rev = growth.get("rev_yoy") if growth else None
         profit = growth.get("profit_yoy") if growth else None
 
         # 评分
-        score = health_score(pe, profit, dist_pct, div_yield)
+        s = 5.0
+        if pe is not None:
+            if pe < 8:   s += 2
+            elif pe < 15: s += 1
+            elif pe > 50: s -= 2
+            elif pe > 30: s -= 1
+        if profit is not None:
+            if profit > 20:     s += 1.5
+            elif profit > 10:   s += 0.5
+            elif profit < -20:  s -= 2
+            elif profit < -10:  s -= 1
+        if dist_pct is not None:
+            if dist_pct < 5:    s += 1
+            elif dist_pct > 30: s -= 1
+        if div_yield is not None:
+            if div_yield > 4:   s += 1
+            elif div_yield > 2: s += 0.5
+        s = round(max(0, min(10, s)), 1)
 
         rows.append({
-            "name": name, "code": code,
-            "price": price, "pe": pe, "pb": pb,
-            "shares": shares, "mv": mv,
-            "tp": tp, "dist_pct": dist_pct,
-            "dps": dps, "div_total": div_total, "div_yield": div_yield,
-            "rev": rev, "profit": profit,
-            "score": score,
+            "name": name, "price": price, "pe": pe, "pb": pb,
+            "mv": mv, "tp": tp, "dist_pct": dist_pct,
+            "div_yield": div_yield, "div_total": div_total,
+            "rev": rev, "profit": profit, "score": s,
         })
+        print(f"  {name} PE{pe} 利润{profit}% dist{dist_pct} → {s}")
 
-        print(f"  {name} PE{pe} 利润{profit}% 距触发{dist_pct}% → {score}分")
-
-    # 仓位占比
     for r in rows:
         r["weight"] = (r["mv"] / total_mv * 100) if total_mv > 0 else 0
-
-    # 按评分排序
     rows.sort(key=lambda x: x["score"], reverse=True)
 
+    # 紧凑文本
     lines = [
         f"持仓九宫格 {now:%m}.{now:%d}",
-        f"总资产{total_mv/10000:.1f}万 | 现金{cash/10000:.1f}万",
-        "",
-        "| 股票 | 评分 | PE | 利润增速 | 距触发 | 股息率 | 仓位 |",
-        "|:--|:--:|:--:|:--:|:--:|:--:|:--:|",
+        f"总{total_mv/10000:.1f}万 | 现金{cash/10000:.1f}万 | 仓位{(total_mv-cash)/total_mv*100:.0f}%",
     ]
 
     for r in rows:
-        pe_str = f"{r['pe']:.1f}" if r["pe"] else "?"
-        profit_str = f"{r['profit']:+.1f}%" if r["profit"] is not None else "?"
-        dist_str = f"{r['dist_pct']:+.1f}%" if r["dist_pct"] is not None else "?"
-        div_str = f"{r['div_yield']:.1f}%" if r["div_yield"] else "-"
-        weight_str = f"{r['weight']:.1f}%"
+        pe_s = f"PE{r['pe']:.0f}" if r["pe"] else "PE?"
+        pf_s = f"利{r['profit']:+.0f}%" if r["profit"] is not None else "利?"
+        ds_s = f"距{r['dist_pct']:+.0f}%" if r["dist_pct"] is not None else ""
+        dv_s = f"息{r['div_yield']:.1f}%" if r["div_yield"] else ""
+        wt_s = f"{r['weight']:.0f}%"
 
-        lines.append(
-            f"| {r['name']} | {grade(r['score'])} {r['score']} | "
-            f"{pe_str} | {profit_str} | {dist_str} | {div_str} | {weight_str} |"
-        )
-
-    lines.append("")
+        line = (f"{score_emoji(r['score'])} {r['name']} "
+                f"{pe_s} {pf_s} {ds_s} {dv_s} 仓{wt_s} 评分{r['score']}")
+        lines.append(line)
 
     # 分红合计
     total_div = sum(r["div_total"] for r in rows)
-    lines.append(f"全年分红: {total_div/10000:.2f}万 | 已收: 估算中")
+    lines.append("")
+    lines.append(f"全年分红 {total_div/10000:.2f}万 | 已收约{total_div/10000:.2f}万")
 
-    # 高仓位提醒
+    # 提醒
     heavy = [r for r in rows if r["weight"] > 15]
-    if heavy:
-        lines.append("⚠️ 仓位>15%: " + ", ".join(r["name"] for r in heavy))
-
-    # 需加仓
     buy_zone = [r for r in rows if r["dist_pct"] is not None and r["dist_pct"] < 5 and r["score"] >= 5]
-    if buy_zone:
-        lines.append("🎯 加仓区: " + ", ".join(r["name"] for r in buy_zone))
-
-    # 需关注
     watch = [r for r in rows if r["score"] < 5]
+
+    if heavy:
+        lines.append(f"⚠️ 仓位>15%: {' '.join(r['name'] for r in heavy)}")
+    if buy_zone:
+        lines.append(f"🎯 加仓区: {' '.join(r['name'] for r in buy_zone)}")
     if watch:
-        lines.append("🔍 关注: " + ", ".join(r["name"] for r in watch))
+        lines.append(f"🔍 关注: {' '.join(r['name'] for r in watch)}")
 
     lines.append("")
-    lines.append("> 评分=PE+增速+距触发+股息 | 每周一更新")
+    lines.append("> PE+增速+距触发+股息 → 综合评分 | 每周一")
 
     push(f"持仓体检 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE]")
