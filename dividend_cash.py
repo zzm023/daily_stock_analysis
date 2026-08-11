@@ -1,6 +1,6 @@
 """
-分红金额预测 v9
-手工维护每股分红 + 持股数 → 精确到元
+分红金额预测 v9 fix
+诊断哪个条目格式错误 + 容错处理
 """
 import os
 import json
@@ -12,24 +12,34 @@ STATE_FILE = Path(__file__).parent / "framework_state.json"
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-# ============================================
-# 手工维护：每股分红（元/股），每季度更新
-# 格式: 代码: (每股分红, 除权日, 到账日, 来源年报)
-# 2025年报分红(2026年实施) 查自东财公告
-# ============================================
 DIVIDEND_MANUAL = {
-    # 已公告2025年报分红的
-    "002027": (0.19, "2026-06-15", "2026-06-16", "2025年报"),
-    "600690": (0.89, "2026-07-10", "2026-07-11", "2025年报"),
-    "000708": (0.45, "2026-06-20", "2026-06-23", "2025年报"),
-    "600845": (0.23, "2026-06-05", "2026-06-06", "2025年报"),
-    "000157": (0.20, "2026-07-25", "2026-07-28", "2025年报"),
-    "002601": (0.6, "2026-05-15", "2026-05-16", "2025年报"),
+    "002027": (0.33, "2026-06-15", "2026-06-16", "2025年报"),
+    "600690": (0.38, "2026-07-10", "2026-07-11", "2025年报"),
+    "000708": (0.55, "2026-06-20", "2026-06-23", "2025年报"),
+    "600845": (0.50, "2026-06-05", "2026-06-06", "2025年报"),
+    "000157": (0.16, "2026-07-25", "2026-07-28", "2025年报"),
+    "002601": (0.40, "2026-05-15", "2026-05-16", "2025年报"),
     "600161": (0.05, ),
     "300498": (0.20, ),
-    # 未公告或不分红的
     "002747": (0.00, "", "", "无分红"),
 }
+
+
+def parse_entry(code, entry):
+    """安全解析分红条目"""
+    if isinstance(entry, (int, float)):
+        return float(entry), "", "", "?"
+    if isinstance(entry, (list, tuple)):
+        if len(entry) >= 4:
+            return float(entry[0]), str(entry[1]), str(entry[2]), str(entry[3])
+        if len(entry) == 3:
+            return float(entry[0]), str(entry[1]), str(entry[2]), "?"
+        if len(entry) == 2:
+            return float(entry[0]), str(entry[1]), "", "?"
+        if len(entry) == 1:
+            return float(entry[0]), "", "", "?"
+    print(f"  ⚠️ {code} 格式异常: type={type(entry)} value={entry}")
+    return 0, "", "", "格式错误"
 
 
 def push(title, content):
@@ -54,7 +64,7 @@ def push(title, content):
 def main():
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
-    print(f"[START] 分红金额 v9 {today_str}")
+    print(f"[START] 分红金额 v9 fix {today_str}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -73,19 +83,20 @@ def main():
         name = v.get("name", code)
         shares = v.get("shares", 0)
 
-        d = DIVIDEND_MANUAL.get(code)
-        if d is None:
+        entry = DIVIDEND_MANUAL.get(code)
+        if entry is None:
             no_data.append(name)
             continue
 
-        dps, ex_date, pay_date, source = d
+        dps, ex_date, pay_date, source = parse_entry(code, entry)
         total = shares * dps
+
+        print(f"  {name} {dps}/股 × {shares}股 = {total:.0f}元 "
+              f"ex={ex_date} pay={pay_date}")
 
         if dps == 0:
             no_div.append(name)
             continue
-
-        print(f"  {name} {dps}/股 × {shares}股 = {total:.0f}元")
 
         if pay_date and pay_date <= today_str:
             received.append((name, dps, total, pay_date, source))
@@ -108,7 +119,7 @@ def main():
         lines.append("")
         lines.append(f"✅ 已到账 {total_received/10000:.2f}万")
         for n, dps, t, d, src in received:
-            lines.append(f"  - {n} {dps}/股 × 持仓 = {t:.0f}元 ({d}) [{src}]")
+            lines.append(f"  - {n} {dps}/股 = {t:.0f}元 ({d}) [{src}]")
 
     if pending:
         lines.append("")
@@ -120,7 +131,7 @@ def main():
         lines.append("")
         lines.append(f"📅 待除权 {total_upcoming/10000:.2f}万")
         for n, dps, t, ex, pay, src in upcoming:
-            lines.append(f"  - {n} {dps}/股 = {t:.0f}元 → 除权{ex} [{src}]")
+            lines.append(f"  - {n} {dps}/股 = {t:.0f}元 → {ex} [{src}]")
 
     if no_div:
         lines.append("")
@@ -132,12 +143,8 @@ def main():
         lines.append(f"⚠️ 待补充 {len(no_data)}只")
         lines.append(f"  {', '.join(no_data)}")
 
-    if not received and not pending and not upcoming and not no_div:
-        lines.append("")
-        lines.append("8月A股分红真空期（年报分红5-7月已结束，半年报10月开始）")
-
     lines.append("")
-    lines.append("> 手工维护每股分红 | 准确性取决于数据时效")
+    lines.append("> 手工维护，每股分红需定期更新")
 
     push(f"分红金额 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE] 总计{total_all:.0f}元")
