@@ -1,6 +1,6 @@
 """
-利润缓存 v2
-新浪财报 → 营收/利润同比 → JSON缓存
+利润缓存 v3
+新浪财报页 → HTML解析 → 营收/利润增速
 """
 import os
 import json
@@ -17,106 +17,81 @@ PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
 def get_profit_sina(code):
-    """新浪财报 → 最新年报净利润增速"""
-    # sina 财报接口
-    url = (
-        f"https://money.finance.sina.com.cn/corp/go.php/vFD_FinanceSummary"
-        f"/stockid/{code}/displaytype/4.phtml"
-    )
+    """新浪财报摘要页 → 近两年年报利润增速"""
     try:
+        url = (
+            f"https://money.finance.sina.com.cn/corp/go.php/"
+            f"vFD_FinanceSummary/stockid/{code}/displaytype/4.phtml"
+        )
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         r.encoding = "gb2312"
-        html = r.text
 
-        # 找最近一个有数据的年份
-        # 匹配模式: <td>2025-12-31</td>...<td>净利润(万元)</td>...数字
-        years = re.findall(r'(\d{4})-12-31', html)
-        if not years:
+        text = r.text
+
+        # 财务指标表: td 里是年份-12-31 紧跟数字
+        # <tr><td>2025-12-31</td><td>2024-12-31</td><td>2023-12-31</td>...</tr>
+        # 找包含"净利润"的行 后面跟数据行
+
+        # 简化：找包含 2025-12-31 和 2024-12-31 且包含净利润的行
+        # 或者直接用正则找 营收/净利行
+
+        # 模式：先找表头年份
+        year_row = re.search(
+            r'(\d{4})-12-31.*?(\d{4})-12-31.*?(\d{4})-12-31', text
+        )
+        if not year_row:
             return None
 
-        latest_year = max(years)
+        y1, y2, y3 = year_row.group(1), year_row.group(2), year_row.group(3)
 
-        # 解析年度净利润数据表
-        # 找 "一、营业总收入" 和 "四、净利润"
-        # 简化: 找包含 latest_year 的行块，提取关键数字
-
-        # 更可靠的方式: 找营收增长率
-        # 尝试匹配利润表中的数字
-        rev_pattern = re.compile(
-            rf'{latest_year}-12-31.*?营业收入.*?<td[^>]*>([-\d,.]+)</td>',
-            re.DOTALL
+        # 找"净利润"后面紧跟的三列数字
+        profit_row = re.search(
+            r'净利润</a>.*?</tr>.*?<tr[^>]*>(.*?)</tr>',
+            text, re.DOTALL
         )
-        profit_pattern = re.compile(
-            rf'{latest_year}-12-31.*?净利润.*?<td[^>]*>([-\d,.]+)</td>',
-            re.DOTALL
+        if not profit_row:
+            # 换种方式
+            profit_row = re.search(
+                r'归属于母公司所有者的净利润.*?</tr>.*?<tr[^>]*>(.*?)</tr>',
+                text, re.DOTALL
+            )
+
+        if not profit_row:
+            return None
+
+        cells = re.findall(r'<td[^>]*>([-\d.,]+)</td>', profit_row.group(1))
+        if len(cells) < 2:
+            return None
+
+        cur_p = float(cells[0].replace(",", "")) if cells[0] != "--" else None
+        prev_p = float(cells[1].replace(",", "")) if cells[1] != "--" else None
+
+        profit_yoy = None
+        if cur_p and prev_p and prev_p != 0:
+            profit_yoy = round((cur_p - prev_p) / abs(prev_p) * 100, 1)
+
+        # 营收
+        rev_row = re.search(
+            r'营业总收入.*?</tr>.*?<tr[^>]*>(.*?)</tr>',
+            text, re.DOTALL
         )
+        rev_yoy = None
+        if rev_row:
+            r_cells = re.findall(r'<td[^>]*>([-\d.,]+)</td>', rev_row.group(1))
+            if len(r_cells) >= 2:
+                cur_r = float(r_cells[0].replace(",", "")) if r_cells[0] != "--" else None
+                prev_r = float(r_cells[1].replace(",", "")) if r_cells[1] != "--" else None
+                if cur_r and prev_r and prev_r != 0:
+                    rev_yoy = round((cur_r - prev_r) / abs(prev_r) * 100, 1)
 
-        # 直接用简化方法：匹配两个连续年份的数据
-        year_pattern = re.compile(rf'{latest_year}-12-31.*?{int(latest_year)-1}-12-31', re.DOTALL)
-
-        return None  # 太复杂，换思路
-    except Exception:
-        return None
-
-
-def get_profit_eastmoney_dc(code):
-    """批量取东财所有财报 → 找最新两条年报算增速"""
-    try:
-        r = requests.get(
-            "https://datacenter.eastmoney.com/securities/api/v1/get",
-            params={
-                "reportName": "RPT_LICO_FN_CPD",
-                "columns": "SECURITY_CODE,NOTICE_DATE,REPORT_DATE,TOTAL_OPERATE_INCOME,PARENT_NETPROFIT",
-                "filter": f'(SECURITY_TYPE_CODE="058001001")',
-                "pageNumber": 1,
-                "pageSize": 500,
-                "sortTypes": -1,
-                "sortColumns": "NOTICE_DATE",
-            },
-            timeout=30,
-            headers={"Referer": "https://data.eastmoney.com/", "User-Agent": "Mozilla/5.0"}
-        )
-        data = r.json()
-        if data.get("success") and data.get("result"):
-            items = data["result"].get("data") or []
-            print(f"  批量取 {len(items)} 条")
-            # 按代码分组 → 找每只最新两条年报
-            by_code = {}
-            for item in items:
-                code = item.get("SECURITY_CODE","")
-                rdate = item.get("REPORT_DATE","")
-                if not code or "-12-31" not in rdate:
-                    continue
-                if code not in by_code:
-                    by_code[code] = []
-                by_code[code].append(item)
-
-            results = {}
-            for code, rows in by_code.items():
-                rows.sort(key=lambda x: x.get("REPORT_DATE",""), reverse=True)
-                if len(rows) >= 2:
-                    cur = rows[0]
-                    prev = rows[1]
-                    cur_profit = cur.get("PARENT_NETPROFIT")
-                    prev_profit = prev.get("PARENT_NETPROFIT")
-                    cur_rev = cur.get("TOTAL_OPERATE_INCOME")
-                    prev_rev = prev.get("TOTAL_OPERATE_INCOME")
-                    if cur_profit and prev_profit and prev_profit != 0:
-                        profit_yoy = (cur_profit - prev_profit) / abs(prev_profit) * 100
-                    else:
-                        profit_yoy = None
-                    if cur_rev and prev_rev and prev_rev != 0:
-                        rev_yoy = (cur_rev - prev_rev) / abs(prev_rev) * 100
-                    else:
-                        rev_yoy = None
-                    results[code] = {
-                        "profit_yoy": round(profit_yoy, 1) if profit_yoy is not None else None,
-                        "rev_yoy": round(rev_yoy, 1) if rev_yoy is not None else None,
-                        "report_date": rows[0].get("REPORT_DATE","?"),
-                    }
-            return results
+        return {
+            "profit_yoy": profit_yoy,
+            "rev_yoy": rev_yoy,
+            "report_date": f"{y1}-12-31",
+            "source": "sina",
+        }
     except Exception as e:
-        print(f"  dc失败: {e}")
+        pass
     return None
 
 
@@ -141,7 +116,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 利润缓存 v2 {now:%Y-%m-%d}")
+    print(f"[START] 利润缓存 v3 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -157,12 +132,6 @@ def main():
         if c != "cash" and isinstance(hold.get(c), dict):
             codes.add(c)
 
-    # 批量取
-    all_data = get_profit_eastmoney_dc(None)
-    if not all_data:
-        print("  无数据")
-        return
-
     cache = {}
     if CACHE_FILE.exists():
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
@@ -171,21 +140,20 @@ def main():
     hit = 0
     miss = 0
     for code in sorted(codes):
-        d = all_data.get(code)
-        if d:
+        if code in cache and cache[code].get("profit_yoy") is not None:
+            hit += 1
+            continue
+
+        d = get_profit_sina(code)
+        if d and d.get("profit_yoy") is not None:
             cache[code] = d
-            if d.get("profit_yoy") is not None:
-                hit += 1
-            else:
-                miss += 1
+            hit += 1
+            print(f"  {code} ✅ profit_yoy={d['profit_yoy']}%")
         else:
-            if code not in cache:
-                cache[code] = {"profit_yoy": None, "rev_yoy": None, "report_date": "?"}
-                miss += 1
-            else:
-                hit += 1
-        if code in all_data:
-            print(f"  {code} → profit_yoy={all_data[code].get('profit_yoy')}")
+            cache[code] = {"profit_yoy": None, "rev_yoy": None, "report_date": "?", "source": "sina"}
+            miss += 1
+            print(f"  {code} ❌")
+        time.sleep(0.5)
 
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
@@ -207,7 +175,7 @@ def main():
         lines.append(f"⚠️ 仍缺失 {len(still_miss)}只 {', '.join(names[:8])}")
 
     lines.append("")
-    lines.append("> RPT_LICO_FN_CPD批量 | 年报同比")
+    lines.append("> 新浪财报HTML | 年报同比 | 需commit持久化")
 
     push(f"利润缓存 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE]")
