@@ -1,6 +1,6 @@
 """
-距触发价排行 v2
-手机优化：一行一只 + 间距清晰
+距触发价排行 v3
+手机优化：- 列表 + 每组最多10只 + 换行
 """
 import os
 import json
@@ -65,7 +65,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 距触发价排行 v2 {now:%Y-%m-%d}")
+    print(f"[START] 距触发价排行 v3 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -103,44 +103,43 @@ def main():
     mid = [r for r in rows if 10 < r["dist_pct"] <= 30]
     far = [r for r in rows if r["dist_pct"] > 30]
 
-    def line(r):
+    def item(r):
         h = "★" if r["held"] else ""
         p = f"PE{r['pe']:.0f}" if r["pe"] else ""
-        return f"{h}{r['name']} {r['price']:.2f}  {r['dist_pct']:+.1f}%  {p}"
+        return f"- {h}{r['name']} {r['price']:.2f}  {r['dist_pct']:+.1f}%  {p}"
 
     lines = [
         f"触发价排行 {now:%m}.{now:%d}",
-        f"现价/触发价  ★持仓",
+        f"★持仓 | 负值=已触发",
     ]
 
     if triggered:
         lines.append("")
-        lines.append("▸ 已触发")
+        lines.append("▶ 已触发")
         for r in triggered:
-            lines.append(line(r))
+            lines.append(item(r))
 
     if close:
         lines.append("")
-        lines.append(f"▸ 接近 <10% ({len(close)}只)")
-        for r in close:
-            lines.append(line(r))
+        lines.append(f"▶ 接近 <10%（{len(close)}只）")
+        for r in close[:10]:
+            lines.append(item(r))
+        if len(close) > 10:
+            lines.append(f"- ...还有{len(close)-10}只")
 
     if mid:
         lines.append("")
-        lines.append(f"▸ 较远 10-30% ({len(mid)}只)")
+        lines.append(f"▶ 较远 10-30%（{len(mid)}只）")
         for r in mid[:8]:
-            lines.append(line(r))
+            lines.append(item(r))
         if len(mid) > 8:
-            lines.append(f"  ...等等 {len(mid)-8}只")
+            lines.append(f"- ...还有{len(mid)-8}只")
 
     if far:
         lines.append("")
-        lines.append(f"▸ 遥远 >30% ({len(far)}只)")
+        lines.append(f"▶ 遥远 >30%（{len(far)}只）")
         for r in far[:5]:
-            lines.append(line(r))
-
-    lines.append("")
-    lines.append("负值=已触发 | 越小越接近击球区")
+            lines.append(item(r))
 
     push(f"触发价排行 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE]")
