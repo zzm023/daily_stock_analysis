@@ -1,6 +1,6 @@
 """
-距触发价排行 v1
-全框架股 现价/触发价 → 排序 → 谁最接近击球区
+距触发价排行 v2
+手机优化：一行一只 + 间距清晰
 """
 import os
 import json
@@ -65,7 +65,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 距触发价排行 v1 {now:%Y-%m-%d}")
+    print(f"[START] 距触发价排行 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -74,10 +74,7 @@ def main():
     hold = state.get("holdings", {})
 
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
-    print(f"  框架股 {len(codes)} 只")
-
     quotes = batch_tencent(codes)
-    print(f"  行情 {len(quotes)} 只")
 
     rows = []
     for code in codes:
@@ -86,80 +83,67 @@ def main():
         tp = t.get("trigger_price", 0)
         if tp <= 0:
             continue
-
         q = quotes.get(code, {})
         price = q.get("price", 0)
         if price <= 0:
             continue
-
-        pe = q.get("pe")
-        dist_pct = (price - tp) / tp * 100
-        is_held = code in hold
-
         rows.append({
             "name": name,
-            "code": code,
             "price": price,
             "tp": tp,
-            "pe": pe,
-            "dist_pct": dist_pct,
-            "held": is_held,
+            "pe": q.get("pe"),
+            "dist_pct": (price - tp) / tp * 100,
+            "held": code in hold,
         })
 
     rows.sort(key=lambda x: x["dist_pct"])
 
-    # 分组
     triggered = [r for r in rows if r["dist_pct"] <= 0]
     close = [r for r in rows if 0 < r["dist_pct"] <= 10]
     mid = [r for r in rows if 10 < r["dist_pct"] <= 30]
     far = [r for r in rows if r["dist_pct"] > 30]
 
-    def fmt(r):
-        held = "★" if r["held"] else " "
-        pe_s = f"PE{r['pe']:.0f}" if r["pe"] else ""
-        return (f"{held}{r['name']} "
-                f"{r['price']:.2f} "
-                f"距{r['dist_pct']:+.1f}% "
-                f"{pe_s}")
+    def line(r):
+        h = "★" if r["held"] else ""
+        p = f"PE{r['pe']:.0f}" if r["pe"] else ""
+        return f"{h}{r['name']} {r['price']:.2f}  {r['dist_pct']:+.1f}%  {p}"
 
     lines = [
-        f"距触发价排行 {now:%m}.{now:%d}",
-        f"现价/触发价 | ★=已持仓",
+        f"触发价排行 {now:%m}.{now:%d}",
+        f"现价/触发价  ★持仓",
     ]
 
     if triggered:
         lines.append("")
-        lines.append(f"🎯 已触发 {len(triggered)}只")
+        lines.append("▸ 已触发")
         for r in triggered:
-            lines.append(fmt(r))
+            lines.append(line(r))
 
     if close:
         lines.append("")
-        lines.append(f"🟢 接近(<10%) {len(close)}只")
+        lines.append(f"▸ 接近 <10% ({len(close)}只)")
         for r in close:
-            lines.append(fmt(r))
+            lines.append(line(r))
 
     if mid:
         lines.append("")
-        lines.append(f"🟡 较远(10-30%) {len(mid)}只")
-        for r in mid[:5]:
-            lines.append(fmt(r))
-        if len(mid) > 5:
-            lines.append(f"  ...等{len(mid)-5}只")
+        lines.append(f"▸ 较远 10-30% ({len(mid)}只)")
+        for r in mid[:8]:
+            lines.append(line(r))
+        if len(mid) > 8:
+            lines.append(f"  ...等等 {len(mid)-8}只")
 
     if far:
         lines.append("")
-        lines.append(f"🔴 遥远(>30%) {len(far)}只")
+        lines.append(f"▸ 遥远 >30% ({len(far)}只)")
         for r in far[:5]:
-            lines.append(fmt(r))
-        if len(far) > 5:
-            lines.append(f"  ...等{len(far)-5}只")
+            lines.append(line(r))
 
     lines.append("")
-    lines.append("> 距=现价高于触发价% | 负值=已触发")
+    lines.append("负值=已触发 | 越小越接近击球区")
 
-    push(f"距触发价排行 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE] 触发{len(triggered)} 接近{len(close)} 较远{len(mid)} 遥远{len(far)}")
+    push(f"触发价排行 {now:%m}.{now:%d}", "\n".join(lines))
+    print(f"[DONE]")
 
 
 if __name__ == "__main__":
