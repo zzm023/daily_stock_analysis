@@ -1,6 +1,6 @@
 """
-持仓九宫格 v2
-紧凑文本 + 放宽超时 + 东财重试
+持仓九宫格 v3
+手机优化：每只2行 + 分组 + 精简
 """
 import os
 import json
@@ -76,18 +76,8 @@ def get_growth(code):
                 }
         except Exception:
             pass
-        time.sleep(1.0 if attempt == 0 else 2.0)
+        time.sleep(1.5 if attempt == 0 else 3.0)
     return None
-
-
-def score_emoji(s):
-    if s >= 8:
-        return "🟢"
-    if s >= 6:
-        return "🟡"
-    if s >= 4:
-        return "🟠"
-    return "🔴"
 
 
 def push(title, content):
@@ -111,7 +101,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 持仓九宫格 v2 {now:%Y-%m-%d}")
+    print(f"[START] 持仓九宫格 v3 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -158,7 +148,6 @@ def main():
         rev = growth.get("rev_yoy") if growth else None
         profit = growth.get("profit_yoy") if growth else None
 
-        # 评分
         s = 5.0
         if pe is not None:
             if pe < 8:   s += 2
@@ -190,42 +179,66 @@ def main():
         r["weight"] = (r["mv"] / total_mv * 100) if total_mv > 0 else 0
     rows.sort(key=lambda x: x["score"], reverse=True)
 
-    # 紧凑文本
+    # 分组
+    good = [r for r in rows if r["score"] >= 6]
+    warn = [r for r in rows if 4 <= r["score"] < 6]
+    bad = [r for r in rows if r["score"] < 4]
+
+    def fmt(r):
+        """手机紧凑一行"""
+        parts = []
+        parts.append(f"PE{r['pe']:.0f}" if r["pe"] else "PE?")
+        if r["profit"] is not None:
+            parts.append(f"利{r['profit']:+.0f}%")
+        if r["dist_pct"] is not None:
+            parts.append(f"距{r['dist_pct']:+.0f}%")
+        if r["div_yield"]:
+            parts.append(f"息{r['div_yield']:.1f}%")
+        parts.append(f"仓{r['weight']:.0f}%")
+        return "  ".join(parts)
+
     lines = [
-        f"持仓九宫格 {now:%m}.{now:%d}",
+        f"持仓体检 {now:%m}.{now:%d}",
         f"总{total_mv/10000:.1f}万 | 现金{cash/10000:.1f}万 | 仓位{(total_mv-cash)/total_mv*100:.0f}%",
     ]
 
-    for r in rows:
-        pe_s = f"PE{r['pe']:.0f}" if r["pe"] else "PE?"
-        pf_s = f"利{r['profit']:+.0f}%" if r["profit"] is not None else "利?"
-        ds_s = f"距{r['dist_pct']:+.0f}%" if r["dist_pct"] is not None else ""
-        dv_s = f"息{r['div_yield']:.1f}%" if r["div_yield"] else ""
-        wt_s = f"{r['weight']:.0f}%"
+    if good:
+        lines.append("")
+        lines.append("◆ 健康")
+        for r in good:
+            lines.append(f"🟢 {r['name']} {r['score']}")
+            lines.append(f"   {fmt(r)}")
 
-        line = (f"{score_emoji(r['score'])} {r['name']} "
-                f"{pe_s} {pf_s} {ds_s} {dv_s} 仓{wt_s} 评分{r['score']}")
-        lines.append(line)
+    if warn:
+        lines.append("")
+        lines.append("◆ 注意")
+        for r in warn:
+            lines.append(f"🟡 {r['name']} {r['score']}")
+            lines.append(f"   {fmt(r)}")
 
-    # 分红合计
+    if bad:
+        lines.append("")
+        lines.append("◆ 危险")
+        for r in bad:
+            lines.append(f"🔴 {r['name']} {r['score']}")
+            lines.append(f"   {fmt(r)}")
+
     total_div = sum(r["div_total"] for r in rows)
     lines.append("")
-    lines.append(f"全年分红 {total_div/10000:.2f}万 | 已收约{total_div/10000:.2f}万")
+    lines.append(f"💵 全年分红 {total_div/10000:.2f}万")
 
-    # 提醒
-    heavy = [r for r in rows if r["weight"] > 15]
     buy_zone = [r for r in rows if r["dist_pct"] is not None and r["dist_pct"] < 5 and r["score"] >= 5]
-    watch = [r for r in rows if r["score"] < 5]
-
-    if heavy:
-        lines.append(f"⚠️ 仓位>15%: {' '.join(r['name'] for r in heavy)}")
     if buy_zone:
-        lines.append(f"🎯 加仓区: {' '.join(r['name'] for r in buy_zone)}")
-    if watch:
-        lines.append(f"🔍 关注: {' '.join(r['name'] for r in watch)}")
+        names = " ".join(r["name"] for r in buy_zone)
+        lines.append(f"🎯 加仓区 {names}")
+
+    heavy = [r for r in rows if r["weight"] > 15]
+    if heavy:
+        names = " ".join(r["name"] for r in heavy)
+        lines.append(f"⚠️ 重仓 {names}")
 
     lines.append("")
-    lines.append("> PE+增速+距触发+股息 → 综合评分 | 每周一")
+    lines.append("PE 利=利润增速 距=距触发价 息=股息率")
 
     push(f"持仓体检 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE]")
