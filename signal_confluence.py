@@ -1,7 +1,6 @@
 """
-多信号共振 v1
-4灯：PE低估 + 近触发价 + 利润正增长 + 高股息
-3灯以上推送强信号
+多信号共振 v2
+push2 f59 + 手工利润字典
 """
 import os
 import json
@@ -15,7 +14,6 @@ STATE_FILE = Path(__file__).parent / "framework_state.json"
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-# 股息兜底
 DIV_FALLBACK = {
     "002027": 0.33, "600690": 0.38, "000708": 0.55,
     "600845": 0.50, "000157": 0.16, "002601": 0.40,
@@ -29,6 +27,16 @@ DIV_FALLBACK = {
     "688036": 0.50, "603806": 0.30, "002508": 0.50,
     "603699": 0.30, "002372": 0.22, "300627": 0.30,
     "600299": 0.20, "600298": 0.30, "600486": 0.50,
+}
+
+GROWTH = {
+    "600036": 1.2, "601601": 64.9, "600031": 27.4,
+    "600585": -26.0, "600188": 8.5, "600660": 25.0,
+    "600941": 5.2, "000333": 14.3, "688187": 24.8,
+    "603288": -18.0, "600900": 7.3, "000651": 10.2,
+    "600845": -3.5, "002027": 18.0, "000708": 8.2,
+    "002601": 45.0, "600161": 46.5, "300498": 110.0,
+    "600690": 12.8, "000157": 41.5, "002747": -20.0,
 }
 
 
@@ -63,22 +71,22 @@ def batch_tencent(codes):
 
 
 def get_growth(code):
+    """push2 f59 → 手工字典"""
     prefix = "1" if code.startswith("6") else "0"
-    for attempt in range(2):
-        try:
-            r = requests.get(
-                "https://push2.eastmoney.com/api/qt/stock/get",
-                params={"secid": f"{prefix}.{code}", "fields": "f43,f173,f185"},
-                timeout=15,
-                headers={"Referer": "https://quote.eastmoney.com/", "User-Agent": "Mozilla/5.0"}
-            )
-            d = r.json().get("data")
-            if d and d.get("f43"):
-                return {"profit_yoy": d.get("f185")}
-        except Exception:
-            pass
-        time.sleep(1)
-    return None
+    try:
+        r = requests.get(
+            "https://push2.eastmoney.com/api/qt/stock/get",
+            params={"secid": f"{prefix}.{code}", "fields": "f43,f59"},
+            timeout=8,
+            headers={"Referer": "https://quote.eastmoney.com/", "User-Agent": "Mozilla/5.0"}
+        )
+        d = r.json().get("data")
+        if d and d.get("f59"):
+            return {"profit_yoy": float(d["f59"])}
+    except Exception:
+        pass
+    fb = GROWTH.get(code)
+    return {"profit_yoy": fb} if fb is not None else None
 
 
 def push(title, content):
@@ -102,7 +110,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 多信号共振 v1 {now:%Y-%m-%d}")
+    print(f"[START] 多信号共振 v2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -112,7 +120,6 @@ def main():
 
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
     quotes = batch_tencent(codes)
-    print(f"  行情 {len(quotes)} 只")
 
     scored = []
     for code in codes:
@@ -130,7 +137,6 @@ def main():
         lights = []
         details = {}
 
-        # 灯1: PE低估 (PE<15 或 未获取)
         if pe is not None and pe < 15:
             lights.append("PE")
             details["pe"] = f"{pe:.0f}"
@@ -138,7 +144,6 @@ def main():
             lights.append("PE?")
             details["pe"] = "?"
 
-        # 灯2: 近触发价 (距<10%)
         if tp > 0:
             dist = (price - tp) / tp * 100
             if dist <= 10:
@@ -146,14 +151,12 @@ def main():
                 details["dist"] = f"{dist:+.0f}%"
             details["_dist"] = dist
 
-        # 灯3: 利润正增长
         g = get_growth(code)
         profit = g.get("profit_yoy") if g else None
         if profit is not None and profit > 0:
             lights.append("利润")
             details["profit"] = f"{profit:+.0f}%"
 
-        # 灯4: 高股息 (>3%)
         dps = DIV_FALLBACK.get(code, 0)
         if dps > 0:
             div_y = dps / price * 100
@@ -161,23 +164,19 @@ def main():
                 lights.append("股息")
                 details["div"] = f"{div_y:.1f}%"
 
-        n = len([l for l in lights if l not in ("PE?",)])
-        details["lights"] = lights
-        details["n"] = n
-        details["name"] = name
-        details["price"] = price
-        details["held"] = code in hold
-        details["tag"] = tag
-
+        n = len([l for l in lights if l != "PE?"])
+        details.update({
+            "lights": lights, "n": n, "name": name,
+            "price": price, "held": code in hold, "tag": tag,
+        })
         scored.append(details)
 
-    # 筛选 3灯以上
     strong = [s for s in scored if s["n"] >= 3]
     strong.sort(key=lambda x: x["n"], reverse=True)
 
     lines = [
         f"信号共振 {now:%m}.{now:%d}",
-        f"4灯模型: PE低估 | 近触发 | 利润+ | 高股息",
+        "4灯: PE低估 | 近触发 | 利润+ | 高股息",
     ]
 
     if strong:
@@ -185,16 +184,12 @@ def main():
         lines.append(f"🔥 3灯以上（{len(strong)}只）")
         for s in strong:
             h = "★" if s["held"] else ""
-            lights_str = " ".join(s["lights"])
-            lines.append(
-                f"- {h}{s['name']} {s['price']:.2f} "
-                f"[{lights_str}] {s['tag']}"
-            )
+            ls = " ".join(s["lights"])
+            lines.append(f"- {h}{s['name']} {s['price']:.2f} [{ls}] {s['tag']}")
     else:
         lines.append("")
-        lines.append("无3灯以上个股  市场不在共振区")
+        lines.append("无3灯以上个股  不在共振区")
 
-    # 2灯备选
     medium = [s for s in scored if s["n"] == 2]
     medium.sort(key=lambda x: x.get("_dist", 999))
     if medium:
@@ -202,17 +197,16 @@ def main():
         lines.append(f"🟡 2灯观察（{len(medium)}只）")
         for s in medium[:8]:
             h = "★" if s["held"] else ""
-            lights_str = " ".join(s["lights"])
-            lines.append(f"- {h}{s['name']} {s['price']:.2f} [{lights_str}]")
+            ls = " ".join(s["lights"])
+            lines.append(f"- {h}{s['name']} {s['price']:.2f} [{ls}]")
         if len(medium) > 8:
             lines.append(f"- ...等{len(medium)-8}只")
 
-    total = len(scored)
     lines.append("")
-    lines.append(f"> 共扫描{total}只 | 3灯以上=击球区")
+    lines.append(f"> 共{len(scored)}只 | 手工利润字典")
 
     push(f"信号共振 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE] 3灯{len(strong)}只 2灯{len(medium) if 'medium' in dir() else 0}")
+    print(f"[DONE] 3灯{len(strong)}只 2灯{len(medium)}只")
 
 
 if __name__ == "__main__":
