@@ -1,6 +1,6 @@
 """
-距触发价排行 v4
-去截断 → 全量显示
+距触发价排行 v5
+统一 - 列表 + 全量
 """
 import os
 import json
@@ -65,7 +65,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 距触发价排行 v4 {now:%Y-%m-%d}")
+    print(f"[START] 距触发价排行 v5 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -103,26 +103,25 @@ def main():
     far = [r for r in rows if r["dist_pct"] > 30]
 
     def item(r):
-        h = "★" if r["held"] else "-"
-        p = f"PE{r['pe']:.0f}" if r["pe"] else ""
-        return f"{h} {r['name']} {r['price']:.2f}  {r['dist_pct']:+.1f}%  {p}"
+        pe_s = f"PE{r['pe']:.0f}" if r["pe"] else ""
+        held_s = " ★" if r["held"] else ""
+        return f"- {r['name']} {r['price']:.2f}  {r['dist_pct']:+.1f}%  {pe_s}{held_s}"
 
-    total = len(rows)
     lines = [
-        f"触发价排行 {now:%m}.{now:%d} 共{total}只",
-        f"★持仓 | 负值=已触发",
+        f"触发价排行 {now:%m}.{now:%d}  共{len(rows)}只",
+        "★=已持仓  负值=已触发",
     ]
 
-    for label, group, emoji in [
-        ("已触发", triggered, "🎯"),
-        ("接近 <10%", close, ""),
-        ("较远 10-30%", mid, ""),
-        ("遥远 >30%", far, ""),
+    for label, group in [
+        ("🎯 已触发", triggered),
+        ("接近 <10%", close),
+        ("较远 10-30%", mid),
+        ("遥远 >30%", far),
     ]:
         if not group:
             continue
         lines.append("")
-        lines.append(f"{emoji} {label}（{len(group)}只）")
+        lines.append(f"**{label}**（{len(group)}只）")
         for r in group:
             lines.append(item(r))
 
