@@ -1,6 +1,6 @@
 """
-分红金额预测 v9 fix
-诊断哪个条目格式错误 + 容错处理
+分红金额预测 v10
+优先 API → 失败兜底手工 → 每半年更新即可
 """
 import os
 import json
@@ -12,34 +12,55 @@ STATE_FILE = Path(__file__).parent / "framework_state.json"
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-DIVIDEND_MANUAL = {
+# 兜底数据（API失败时用，半年更新一次）
+FALLBACK = {
     "002027": (0.33, "2026-06-15", "2026-06-16", "2025年报"),
     "600690": (0.38, "2026-07-10", "2026-07-11", "2025年报"),
     "000708": (0.55, "2026-06-20", "2026-06-23", "2025年报"),
     "600845": (0.50, "2026-06-05", "2026-06-06", "2025年报"),
     "000157": (0.16, "2026-07-25", "2026-07-28", "2025年报"),
     "002601": (0.40, "2026-05-15", "2026-05-16", "2025年报"),
-    "600161": (0.05, ),
-    "300498": (0.20, ),
+    "600161": (0.05, "", "", "2025年报"),
+    "300498": (0.20, "", "", "2025年报"),
     "002747": (0.00, "", "", "无分红"),
 }
 
 
-def parse_entry(code, entry):
-    """安全解析分红条目"""
-    if isinstance(entry, (int, float)):
-        return float(entry), "", "", "?"
-    if isinstance(entry, (list, tuple)):
-        if len(entry) >= 4:
-            return float(entry[0]), str(entry[1]), str(entry[2]), str(entry[3])
-        if len(entry) == 3:
-            return float(entry[0]), str(entry[1]), str(entry[2]), "?"
-        if len(entry) == 2:
-            return float(entry[0]), str(entry[1]), "", "?"
-        if len(entry) == 1:
-            return float(entry[0]), "", "", "?"
-    print(f"  ⚠️ {code} 格式异常: type={type(entry)} value={entry}")
-    return 0, "", "", "格式错误"
+def api_get_all():
+    """API 全量取 → 优先使用"""
+    results = {}
+    try:
+        r = requests.get(
+            "https://datacenter.eastmoney.com/securities/api/v1/get",
+            params={
+                "reportName": "RPT_DMSK_FN_EXRW",
+                "columns": "ALL",
+                "pageNumber": 1,
+                "pageSize": 500,
+                "sortTypes": -1,
+                "sortColumns": "EX_DIVIDEND_DATE",
+            },
+            timeout=30,
+            headers={"Referer": "https://data.eastmoney.com/"}
+        )
+        data = r.json()
+        if data.get("success") and data.get("result"):
+            items = data["result"].get("data") or []
+            for item in items:
+                code = item.get("SECURITY_CODE", "")
+                cash = item.get("CASH_DIVIDEND_RATIO")
+                if code and cash:
+                    results[code] = (
+                        cash,
+                        item.get("EX_DIVIDEND_DATE") or "",
+                        item.get("PAYMENT_DATE") or "",
+                        "API",
+                    )
+            print(f"  API 取到 {len(results)} 只")
+        return results
+    except Exception as e:
+        print(f"  API 失败: {e}")
+        return {}
 
 
 def push(title, content):
@@ -64,7 +85,7 @@ def push(title, content):
 def main():
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
-    print(f"[START] 分红金额 v9 fix {today_str}")
+    print(f"[START] 分红金额 v10 {today_str}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -75,7 +96,11 @@ def main():
         if c != "cash" and isinstance(hold.get(c), dict)
     ]
 
-    received, pending, upcoming, no_div, no_data = [], [], [], [], []
+    # 尝试 API
+    api_data = api_get_all()
+    use_api = len(api_data) >= 2
+
+    received, pending, upcoming, no_div = [], [], [], []
     total_received = total_pending = total_upcoming = 0
 
     for code in hold_codes:
@@ -83,16 +108,16 @@ def main():
         name = v.get("name", code)
         shares = v.get("shares", 0)
 
-        entry = DIVIDEND_MANUAL.get(code)
+        entry = api_data.get(code) if use_api else FALLBACK.get(code)
         if entry is None:
-            no_data.append(name)
             continue
 
-        dps, ex_date, pay_date, source = parse_entry(code, entry)
-        total = shares * dps
+        dps = float(entry[0]) if len(entry) >= 1 else 0
+        ex_date = str(entry[1]) if len(entry) >= 2 else ""
+        pay_date = str(entry[2]) if len(entry) >= 3 else ""
+        source = str(entry[3]) if len(entry) >= 4 else "?"
 
-        print(f"  {name} {dps}/股 × {shares}股 = {total:.0f}元 "
-              f"ex={ex_date} pay={pay_date}")
+        total = shares * dps
 
         if dps == 0:
             no_div.append(name)
@@ -102,17 +127,18 @@ def main():
             received.append((name, dps, total, pay_date, source))
             total_received += total
         elif ex_date and ex_date <= today_str:
-            pending.append((name, dps, total, pay_date, source))
+            pending.append((name, dps, total, pay_date or "?", source))
             total_pending += total
         else:
-            upcoming.append((name, dps, total, ex_date, pay_date, source))
+            upcoming.append((name, dps, total, ex_date or "?", pay_date or "?", source))
             total_upcoming += total
 
     total_all = total_received + total_pending + total_upcoming
 
     lines = [
         f"分红金额 {now:%m}.{now:%d}",
-        f"持仓{len(hold_codes)}只 | 全年{total_all/10000:.2f}万",
+        f"持仓{len(hold_codes)}只 | 全年{total_all/10000:.2f}万"
+        f"{' [API]' if use_api else ' [手工]'}",
     ]
 
     if received:
@@ -135,19 +161,13 @@ def main():
 
     if no_div:
         lines.append("")
-        lines.append(f"无分红 {len(no_div)}只")
-        lines.append(f"  {', '.join(no_div[:6])}")
-
-    if no_data:
-        lines.append("")
-        lines.append(f"⚠️ 待补充 {len(no_data)}只")
-        lines.append(f"  {', '.join(no_data)}")
+        lines.append(f"无分红 {len(no_div)}只  {', '.join(no_div[:6])}")
 
     lines.append("")
-    lines.append("> 手工维护，每股分红需定期更新")
+    lines.append("> 分红一年公告2次 | 手工数据每半年核对一次即可")
 
     push(f"分红金额 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE] 总计{total_all:.0f}元")
+    print(f"[DONE] 总计{total_all:.0f}元 来源={'API' if use_api else '手工'}")
 
 
 if __name__ == "__main__":
