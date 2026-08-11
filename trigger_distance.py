@@ -1,6 +1,6 @@
 """
-距触发价排行 v5
-统一 - 列表 + 全量
+距触发价排行 v6
+全量 + 现金子弹建议
 """
 import os
 import json
@@ -65,13 +65,14 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 距触发价排行 v5 {now:%Y-%m-%d}")
+    print(f"[START] 距触发价排行 v6 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
 
     trigger = state.get("trigger", {})
     hold = state.get("holdings", {})
+    cash = hold.get("cash", 0)
 
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
     quotes = batch_tencent(codes)
@@ -90,6 +91,7 @@ def main():
         rows.append({
             "name": name,
             "price": price,
+            "tp": tp,
             "pe": q.get("pe"),
             "dist_pct": (price - tp) / tp * 100,
             "held": code in hold,
@@ -109,7 +111,7 @@ def main():
 
     lines = [
         f"触发价排行 {now:%m}.{now:%d}  共{len(rows)}只",
-        "★=已持仓  负值=已触发",
+        "★=持仓  负值=已触发",
     ]
 
     for label, group in [
@@ -124,6 +126,25 @@ def main():
         lines.append(f"**{label}**（{len(group)}只）")
         for r in group:
             lines.append(item(r))
+
+    # ============ 现金子弹建议 ============
+    bullets = max(1, int(cash / 50000))
+    close_not_held = [r for r in close if not r["held"]]
+
+    lines.append("")
+    if close_not_held:
+        lines.append(f"🎯 子弹建议  现金{cash/10000:.0f}万={bullets}发")
+        for r in close_not_held[:bullets]:
+            suggest = int(min(cash * 0.3 / bullets, 50000) / 10000)
+            lines.append(
+                f"- {r['name']} 触发{r['tp']:.2f} 现{r['price']:.2f} "
+                f"建议{suggest}万"
+            )
+    else:
+        lines.append("所有股距触发>10%或已持仓  耐心等")
+
+    lines.append("")
+    lines.append("> 每5万=1发  建议≤子弹均分")
 
     push(f"触发价排行 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE]")
