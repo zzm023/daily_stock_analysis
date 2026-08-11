@@ -1,6 +1,6 @@
 """
-分红金额预测 v2
-用已验证的 RPT_DMSK_FN_EXRW → 除权除息表含分红金额
+分红金额预测 v3
+修正 URL + 用已验证的 API 参数
 """
 import os
 import json
@@ -14,50 +14,54 @@ PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
 
 def get_dividends(codes):
-    """东财 RPT_DMSK_FN_EXRW → 除权除息+分红金额"""
-    results = {}
-    for code in codes:
-        try:
-            r = requests.get(
-                "https://datacenter-web.eastmoney.com/api/data/v1/get",
-                params={
-                    "reportName": "RPT_DMSK_FN_EXRW",
-                    "columns": (
-                        "SECURITY_CODE,SECURITY_NAME_ABBR,"
-                        "EX_DIVIDEND_DATE,PAYMENT_DATE,"
-                        "CASH_DIVIDEND_RATIO,"
-                        "BONUS_SHARE_RATIO,TRANSFER_SHARE_RATIO,"
-                        "PLAN_EXPLAIN"
-                    ),
-                    "filter": (
-                        f"(SECURITY_CODE=\"{code}\")"
-                        f"(REPORT_YEAR='2026')"
-                    ),
-                    "pageNumber": 1,
-                    "pageSize": 5,
-                    "sortTypes": -1,
-                    "sortColumns": "EX_DIVIDEND_DATE",
-                },
-                timeout=15,
-                headers={"Referer": "https://data.eastmoney.com/"}
-            )
-            data = r.json()
-            if data.get("success") and data.get("result"):
-                items = data["result"].get("data") or []
-                if items:
-                    item = items[0]  # 最新一条
-                    results[code] = {
-                        "name": item.get("SECURITY_NAME_ABBR", code),
-                        "cash_per10": item.get("CASH_DIVIDEND_RATIO"),
-                        "bonus_share": item.get("BONUS_SHARE_RATIO"),
-                        "transfer": item.get("TRANSFER_SHARE_RATIO"),
-                        "ex_date": item.get("EX_DIVIDEND_DATE"),
-                        "pay_date": item.get("PAYMENT_DATE"),
-                        "plan": item.get("PLAN_EXPLAIN", ""),
-                    }
-        except Exception as e:
-            print(f"  {code} 查询失败: {e}")
-    return results
+    """东财 RPT_DMSK_FN_EXRW → 2025年报分红(2026实施)"""
+    code_filter = ",".join(f'"{c}"' for c in codes)
+    try:
+        r = requests.get(
+            "https://datacenter.eastmoney.com/securities/api/v1/get",
+            params={
+                "reportName": "RPT_DMSK_FN_EXRW",
+                "columns": (
+                    "SECURITY_CODE,SECURITY_NAME_ABBR,"
+                    "CASH_DIVIDEND_RATIO,BONUS_SHARE_RATIO,"
+                    "TRANSFER_SHARE_RATIO,"
+                    "EX_DIVIDEND_DATE,PAYMENT_DATE,"
+                    "REGISTRATION_DATE,PLAN_EXPLAIN"
+                ),
+                "filter": (
+                    f'(SECURITY_CODE in ({code_filter}))'
+                    f'(REPORT_YEAR="2025")'
+                ),
+                "pageNumber": 1,
+                "pageSize": 50,
+                "sortTypes": -1,
+                "sortColumns": "EX_DIVIDEND_DATE",
+            },
+            timeout=15,
+            headers={"Referer": "https://data.eastmoney.com/"}
+        )
+        data = r.json()
+        print(f"  API返回 success={data.get('success')} result={bool(data.get('result'))}")
+        results = {}
+        if data.get("success") and data.get("result"):
+            items = data["result"].get("data") or []
+            print(f"  共 {len(items)} 条记录")
+            for item in items:
+                code = item.get("SECURITY_CODE", "")
+                results[code] = {
+                    "name": item.get("SECURITY_NAME_ABBR", code),
+                    "cash_per10": item.get("CASH_DIVIDEND_RATIO"),
+                    "bonus_share": item.get("BONUS_SHARE_RATIO"),
+                    "transfer": item.get("TRANSFER_SHARE_RATIO"),
+                    "ex_date": item.get("EX_DIVIDEND_DATE"),
+                    "pay_date": item.get("PAYMENT_DATE"),
+                    "reg_date": item.get("REGISTRATION_DATE"),
+                    "plan": item.get("PLAN_EXPLAIN", ""),
+                }
+        return results
+    except Exception as e:
+        print(f"  分红数据获取失败: {e}")
+        return {}
 
 
 def push(title, content):
@@ -84,7 +88,7 @@ def push(title, content):
 def main():
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
-    print(f"[START] 分红金额预测 v2 {today_str}")
+    print(f"[START] 分红金额预测 v3 {today_str}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -95,7 +99,7 @@ def main():
         if c != "cash" and isinstance(hold.get(c), dict)
     ]
 
-    print(f"  持仓 {len(hold_codes)} 只，逐只查询...")
+    print(f"  持仓 {len(hold_codes)} 只: {hold_codes}")
     div_data = get_dividends(hold_codes)
     print(f"  获取 {len(div_data)} 只有数据")
 
@@ -133,8 +137,8 @@ def main():
 
     lines = [
         f"分红金额预测 {now:%m}.{now:%d}",
-        f"持仓{len(hold_codes)}只 | 有分红{len(rows)}只 "
-        f"| 全年预估{total_cash/10000:.2f}万",
+        f"2025年报分红 | 持仓{len(hold_codes)}只 | "
+        f"有分红{len(rows)}只 | 预估{total_cash/10000:.2f}万",
     ]
 
     received = [r for r in rows
@@ -172,7 +176,7 @@ def main():
         lines.append(f"  {', '.join(no_div[:6])}")
 
     lines.append("")
-    lines.append("> 东财除权除息表 | 未含税")
+    lines.append("> 东财除权除息表 2025年报(2026实施) | 未含税")
 
     push(f"分红金额 {now:%m}.{now:%d}", "\n".join(lines))
     print(f"[DONE] 全年预估{total_cash:.0f}元")
