@@ -1,314 +1,293 @@
 {
   "000157": {
-    "profit_yoy": null,
-    "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "profit_yoy": -37.302097730819,
+    "rev_yoy": 1.52,
+    "source": "push2",
+    "report_date": "2025-12-31"
   },
   "000333": {
-    "profit_yoy": null,
-    "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "profit_yoy": 2.031220956812,
+    "rev_yoy": 5.56,
+    "source": "push2",
+    "report_date": "2025-12-31"
   },
   "000429": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "000538": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "000651": {
-    "profit_yoy": null,
-    "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "profit_yoy": 3.009587967055,
+    "rev_yoy": 4.07,
+    "source": "push2",
+    "report_date": "2025-12-31"
   },
   "000708": {
-    "profit_yoy": null,
+    "profit_yoy": 8.2,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "000792": {
-    "profit_yoy": null,
+    "profit_yoy": -40.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "002027": {
-    "profit_yoy": null,
+    "profit_yoy": 18.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "002032": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "002318": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "002410": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "002508": {
-    "profit_yoy": null,
+    "profit_yoy": 3.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "002601": {
-    "profit_yoy": null,
+    "profit_yoy": 45.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "002747": {
-    "profit_yoy": null,
+    "profit_yoy": -20.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "002837": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "002884": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "300124": {
-    "profit_yoy": null,
+    "profit_yoy": -10.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "300498": {
-    "profit_yoy": null,
+    "profit_yoy": 110.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "300627": {
-    "profit_yoy": null,
+    "profit_yoy": 12.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "300628": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "300832": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "600007": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "600018": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "600031": {
-    "profit_yoy": null,
+    "profit_yoy": 27.4,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600036": {
-    "profit_yoy": null,
+    "profit_yoy": 1.2,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600066": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "600161": {
-    "profit_yoy": null,
+    "profit_yoy": 46.5,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600188": {
-    "profit_yoy": null,
+    "profit_yoy": 8.5,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600298": {
-    "profit_yoy": null,
+    "profit_yoy": -8.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600299": {
-    "profit_yoy": null,
+    "profit_yoy": 25.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600309": {
-    "profit_yoy": null,
+    "profit_yoy": -8.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600406": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "600486": {
-    "profit_yoy": null,
+    "profit_yoy": -5.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600585": {
-    "profit_yoy": null,
+    "profit_yoy": -26.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600598": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "600660": {
-    "profit_yoy": null,
+    "profit_yoy": 25.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600690": {
-    "profit_yoy": null,
+    "profit_yoy": 12.8,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600761": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "600845": {
-    "profit_yoy": null,
-    "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "profit_yoy": -14.252332348872,
+    "rev_yoy": 3.39,
+    "source": "push2",
+    "report_date": "2025-12-31"
   },
   "600900": {
-    "profit_yoy": null,
+    "profit_yoy": 7.3,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "600941": {
-    "profit_yoy": null,
+    "profit_yoy": 5.2,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "601058": {
-    "profit_yoy": null,
+    "profit_yoy": 30.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "601601": {
-    "profit_yoy": null,
+    "profit_yoy": 64.9,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "601816": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "603288": {
-    "profit_yoy": null,
+    "profit_yoy": -18.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "603508": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "603568": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "603605": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "603806": {
-    "profit_yoy": null,
+    "profit_yoy": -15.0,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   },
   "603855": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "605098": {
     "profit_yoy": null,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "none"
   },
   "688187": {
-    "profit_yoy": null,
+    "profit_yoy": 24.8,
     "rev_yoy": null,
-    "report_date": "?",
-    "source": "sina"
+    "source": "manual",
+    "report_date": "2025-12-31"
   }
 }
