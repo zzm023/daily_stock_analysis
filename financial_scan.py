@@ -1,8 +1,8 @@
 """
-财报扫描器 v3
-改用 requests params 字典 → 先测单只再看全量
+财报扫描器 v4
+东财 push2 → f173=营收增速 f184=PE f185=利润增速 f46=PB
 """
-import os, json, requests, re
+import os, json, requests, re, time
 from datetime import datetime
 from pathlib import Path
 
@@ -35,57 +35,73 @@ ATTR = {
 }
 
 
-def fetch_one_stock(code):
-    """东财 qt/stock/get + 全财务字段 → 单只测试"""
+def get_fin(code):
+    """东财 push2 → {price, pb, rev_yoy, pe, profit_yoy}"""
     prefix = "1" if code.startswith("6") else "0"
-    try:
-        r = requests.get(
-            "https://push2.eastmoney.com/api/qt/stock/get",
-            params={
-                "secid": f"{prefix}.{code}",
-                "fields": "f43,f57,f58,f37,f38,f39,f40,f41,f42,f55,f173,f183,f184,f185",
-            },
-            timeout=10,
-            headers={"Referer": "https://quote.eastmoney.com/"}
-        )
-        data = r.json().get("data")
-        if not data:
-            return None
-        return {k: v for k, v in data.items()}
-    except Exception as e:
-        print(f"  取 {code} 失败: {e}")
-        return None
-
-
-def fetch_financials_batch(codes):
-    """东财 push2 批量取财务字段"""
-    results = {}
-    for code in codes:
-        d = fetch_one_stock(code)
-        if d:
-            results[code] = d
-        print(f"  {code} → keys={list(d.keys())[:8] if d else 'NONE'} | f37={d.get('f37') if d else 'N/A'} | f55={d.get('f55') if d else 'N/A'}")
-    return results
-
-
-def batch_prices(codes):
-    prices = {}
-    for i in range(0, len(codes), 40):
-        batch = codes[i:i+40]
-        symbols = ",".join(f"sh{c}" if c.startswith("6") else f"sz{c}" for c in batch)
+    for attempt in range(2):
         try:
-            r = requests.get(f"http://qt.gtimg.cn/q={symbols}", timeout=15)
-            r.encoding = "gbk"
-            for c in batch:
-                prefix = "sh" if c.startswith("6") else "sz"
-                m = re.search(f"v_{prefix}{c}=\"[^\"]*\"", r.text)
-                if m:
-                    parts = m.group().split("~")
-                    if len(parts) >= 4 and parts[3]:
-                        prices[c] = float(parts[3])
+            r = requests.get(
+                "https://push2.eastmoney.com/api/qt/stock/get",
+                params={
+                    "secid": f"{prefix}.{code}",
+                    "fields": "f43,f46,f57,f58,f173,f184,f185",
+                },
+                timeout=10,
+                headers={"Referer": "https://quote.eastmoney.com/"}
+            )
+            d = r.json().get("data")
+            if d and d.get("f43"):
+                return {
+                    "price": d["f43"] / 100,
+                    "pb": d.get("f46"),        # PB
+                    "rev_yoy": d.get("f173"),  # 营收增速 %
+                    "pe": d.get("f184"),       # PE
+                    "profit_yoy": d.get("f185"), # 利润增速 %
+                }
         except:
             pass
-    return prices
+        if attempt == 0:
+            time.sleep(0.5)
+    return None
+
+
+def judge(name, d, attr_label):
+    """恶化评分 → (评级, 建议, 问题列表)"""
+    rev, profit, pe, pb = d.get("rev_yoy"), d.get("profit_yoy"), d.get("pe"), d.get("pb")
+    issues, score = [], 0
+
+    if profit is not None and profit < -20:
+        issues.append(f"利润{profit:+.1f}%")
+        score += 2
+    elif profit is not None and profit < -10:
+        issues.append(f"利润{profit:+.1f}%")
+        score += 1
+
+    if rev is not None and rev < -10:
+        issues.append(f"营收{rev:+.1f}%")
+        score += 1
+    elif rev is not None and rev < 0:
+        issues.append(f"营收{rev:+.1f}%")
+        score += 0.5
+
+    if pe is not None and pe > 80:
+        issues.append(f"PE{pe:.0f}")
+        score += 1
+
+    if pb is not None and pb < 0.8:
+        issues.append(f"破净PB{pb:.2f}")
+        score -= 1  # 减分=好
+
+    if score >= 3:
+        return "🔴严重恶化", "建议卖出/禁止买入", issues
+    elif score >= 2:
+        return "🟡轻度恶化", "观察等待，暂不加仓", issues
+    elif score >= 1:
+        return "🟢微瑕", "可持有，密切跟踪", issues
+    elif score < 0:
+        return "💎价值低估", "触发即重仓", issues
+    else:
+        return "✅健康", "触发即买入", issues
 
 
 def push(title, content):
@@ -101,7 +117,7 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 财报扫描器 v3 {now:%Y-%m-%d}")
+    print(f"[START] 财报扫描器 v4 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -111,36 +127,81 @@ def main():
 
     held = {c for c in hold if c != "cash" and isinstance(hold.get(c), dict)}
     triggered = {c for c, t in trigger.items() if isinstance(t, dict) and t.get("status") == "已触发"}
+    prev_triggered = set(state.get("prev_triggered", []))
+    new_triggers = triggered - prev_triggered
 
     codes = sorted(held | triggered)
-    print(f"  目标 {len(codes)} 只: {codes}")
+    print(f"  持仓{len(held)}+触发{len(triggered)}(新{len(new_triggers)})={len(codes)}只")
 
-    # 先测 1 只看字段
-    test = fetch_one_stock(codes[0]) if codes else None
-    print(f"\n  测试 {codes[0] if codes else 'N/A'}:")
-    if test:
-        for k, v in sorted(test.items()):
-            print(f"    {k} = {v}")
-    else:
-        print("    无数据")
+    alerts, healthy, new_scan, no_data = [], [], [], []
+    fin_map = {}
 
-    # 全量取
-    fin = fetch_financials_batch(codes)
-    prices = batch_prices(codes)
+    for i, code in enumerate(codes):
+        n = hold[code].get("name", code) if code in hold and isinstance(hold.get(code), dict) else trigger.get(code, {}).get("name", code) if isinstance(trigger.get(code), dict) else code
+        tag = "持仓" if code in held else "触发"
+        a = ATTR.get(code, "?")
+
+        d = get_fin(code)
+        if not d:
+            no_data.append(f"{n}[{tag}]")
+            continue
+
+        fin_map[code] = d
+        rating, sug, issues = judge(n, d, a)
+
+        row = {"name": n, "tag": tag, "attr": a, "rating": rating, "sug": sug, "issues": issues, "price": d["price"], "pe": d.get("pe"), "pb": d.get("pb"), "rev": d.get("rev_yoy"), "profit": d.get("profit_yoy")}
+
+        if "恶化" in rating:
+            alerts.append(row)
+        else:
+            healthy.append(row)
+
+        if code in new_triggers:
+            new_scan.append(row)
+
+        print(f"  [{i+1}/{len(codes)}] {n} 利润{row['profit']}% PE{row['pe']} → {rating}")
+
+    # 保存
+    state["prev_triggered"] = list(triggered)
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
 
     lines = [
-        f"财报扫描器 v3 {now:%m}.{now:%d}",
-        f"调试模式 | 取 {len(fin)}/{len(codes)} 只",
+        f"财报扫描器 {now:%m}.{now:%d}",
+        f"最新季报 | {len(codes)-len(no_data)}/{len(codes)}只有数据",
     ]
 
-    if test:
-        lines.append("")
-        lines.append("测试字段（招商银行）：")
-        for k, v in sorted(test.items())[:15]:
-            lines.append(f"  {k} = {v}")
+    if alerts:
+        lines.append(""); lines.append("⚠️ 恶化告警")
+        for r in alerts:
+            lines.append(f"  - {r['rating']} {r['name']}[{r['tag']}] {r['attr']}")
+            lines.append(f"    利润{r['profit']:+.1f}% 营收{r['rev']:+.1f}% PE{r['pe']:.1f} PB{r['pb']:.2f}")
+            lines.append(f"    → {r['sug']}")
+            if r["issues"]: lines.append(f"    问题: {', '.join(r['issues'])}")
 
-    push(f"财报扫描器 v3 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE]")
+    if healthy:
+        lines.append(""); lines.append(f"财务健康 {len(healthy)}只")
+        for r in healthy:
+            lines.append(f"  - {r['rating']} {r['name']}[{r['tag']}] {r['attr']} | 利润{r['profit']:+.1f}% 营收{r['rev']:+.1f}% PE{r['pe']:.1f}")
+
+    if new_scan:
+        lines.append(""); lines.append(f"🆕 新触发 ({len(new_triggers)}只)")
+        for r in new_scan:
+            tp = trigger.get(code, {}).get("trigger_price", 0) if isinstance(trigger.get(code), dict) else 0
+            lines.append(f"  - {r['name']} 现{r['price']:.2f} PE{r['pe']:.1f} PB{r['pb']:.2f}")
+            lines.append(f"    {r['rating']} → {r['sug']}")
+
+    if no_data:
+        lines.append(""); lines.append(f"无数据 {len(no_data)}只")
+        lines.append(f"  {', '.join(no_data[:6])}")
+
+    if not alerts and not new_scan:
+        lines.append(""); lines.append("无恶化/无新触发")
+
+    lines.append(""); lines.append(f"> 东财 push2 f173=营收 f184=PE f185=利润增速 f46=PB")
+
+    push(f"财报扫描器 {now:%m}.{now:%d}", "\n".join(lines))
+    print(f"[DONE] 恶化{len(alerts)} 健康{len(healthy)} 新触发{len(new_triggers)}")
 
 
 if __name__ == "__main__":
