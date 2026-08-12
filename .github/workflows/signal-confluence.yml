@@ -19,4 +19,5 @@ jobs:
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: python signal_confluence.py
