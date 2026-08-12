@@ -87,14 +87,19 @@ def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
     print(f"[START] 全市场扫描 v2 {now:%Y-%m-%d}")
 
-    # ── 1. 成分股：index_weight 用最近交易日 ──
+    # ── 1. 成分股：按字段名定位 con_code 列 ──
     constituents = set()
     for idx in ["000300.SH", "000905.SH"]:
         print(f"  拉取 {idx} ...")
-        fields, items = ts_df("index_weight", "con_code",
+        fields, items = ts_df("index_weight", "index_code,con_code,trade_date",
                               index_code=idx)
+        # 按字段名找 con_code 的列位置
+        try:
+            col = fields.index("con_code")
+        except ValueError:
+            col = 0
         for row in items:
-            constituents.add(row[0].split(".")[0])
+            constituents.add(row[col].split(".")[0])
         print(f"    {idx}: {len(items)} 条")
 
     print(f"  [1] 成分股总计: {len(constituents)} 只")
@@ -107,14 +112,16 @@ def main():
     fields, items = ts_df("stock_basic",
                           "ts_code,name,industry,list_date",
                           list_status="L")
+    fc = {f: i for i, f in enumerate(fields)}
     stocks = {}
     for row in items:
-        code = row[0].split(".")[0]
+        code = row[fc["ts_code"]].split(".")[0]
         if constituents and code not in constituents:
             continue
-        if row[3] and row[3] > "20230701":
+        ld = row[fc["list_date"]] if fc.get("list_date") is not None else ""
+        if ld and ld > "20230701":
             continue
-        stocks[code] = {"name": row[1], "industry": row[2]}
+        stocks[code] = {"name": row[fc["name"]], "industry": row[fc["industry"]]}
 
     print(f"  [2] 有效标的: {len(stocks)} 只")
 
@@ -128,23 +135,25 @@ def main():
     # ── 3. PE/PB ──
     fields, items = ts_df("daily_basic", "ts_code,pe,pb,total_mv",
                           ts_code=codes, trade_date=today)
+    fc = {f: i for i, f in enumerate(fields)}
     for row in items:
-        code = row[0].split(".")[0]
+        code = row[fc["ts_code"]].split(".")[0]
         if code in stocks:
-            stocks[code]["pe"] = row[1] if row[1] else None
-            stocks[code]["pb"] = row[2] if row[2] else None
-            stocks[code]["mv"] = row[3] if row[3] else None
+            stocks[code]["pe"] = row[fc["pe"]] if row[fc["pe"]] else None
+            stocks[code]["pb"] = row[fc["pb"]] if row[fc["pb"]] else None
+            stocks[code]["mv"] = row[fc["total_mv"]] if row[fc["total_mv"]] else None
     print(f"  [3] 估值数据: {len(items)} 条")
 
     # ── 4. ROE（上年度） ──
     fy = str(int(now.strftime("%Y")) - 1)
     fields, items = ts_df("fina_indicator", "ts_code,roe",
                           ts_code=codes, end_date=f"{fy}1231")
+    fc = {f: i for i, f in enumerate(fields)}
     for row in items:
-        code = row[0].split(".")[0]
+        code = row[fc["ts_code"]].split(".")[0]
         if code in stocks:
             try:
-                stocks[code]["roe"] = float(row[1])
+                stocks[code]["roe"] = float(row[fc["roe"]])
             except:
                 stocks[code]["roe"] = None
     print(f"  [4] ROE: {len(items)} 条")
@@ -152,10 +161,11 @@ def main():
     # ── 5. 股息率 ──
     fields, items = ts_df("daily_basic", "ts_code,dv_ratio",
                           ts_code=codes, trade_date=today)
+    fc = {f: i for i, f in enumerate(fields)}
     for row in items:
-        code = row[0].split(".")[0]
+        code = row[fc["ts_code"]].split(".")[0]
         if code in stocks:
-            stocks[code]["dv"] = row[1] if row[1] else None
+            stocks[code]["dv"] = row[fc["dv_ratio"]] if row[fc["dv_ratio"]] else None
     print(f"  [5] 股息率: {len(items)} 条")
 
     # ── 6. 筛选 + 分类 ──
