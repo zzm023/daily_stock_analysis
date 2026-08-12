@@ -10,8 +10,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: pip install requests
+      - run: ls -la
       - env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
-        run: python calibration.py
+        run: python -u calibration.py
