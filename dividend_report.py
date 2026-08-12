@@ -1,49 +1,75 @@
-#!/usr/bin/env python3
 """
-股息率周报 v2
-联动 framework_state.json：读触发价+DPS → 写股息事件 → 自动提交
-每周一 08:00 CST
+股息率周报 v3 — Tushare版
+数据源：Tushare分红 + 新浪现价
 """
-import requests
-import re
-import os
-import json
-import subprocess
-from datetime import datetime, timedelta, date as date_type
+import requests, re, os, json, time
+from datetime import datetime, timedelta
 from pathlib import Path
 
-STATE_FILE = Path(__file__).parent / "framework_state.json"
-
+TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
+DIV = {
+    "600036": {"name": "招商银行", "dps": 2.02, "anchor": 6.0},
+    "601601": {"name": "中国太保", "dps": 1.15, "anchor": 3.4},
+    "600018": {"name": "上港集团", "dps": 0.145, "anchor": 4.5},
+    "601816": {"name": "京沪高铁", "dps": 0.095, "anchor": 3.0},
+    "600900": {"name": "长江电力", "dps": 0.79, "anchor": 4.5},
+    "600941": {"name": "中国移动", "dps": 4.70, "anchor": 5.5},
+    "600406": {"name": "国电南瑞", "dps": 0.475, "anchor": 3.0},
+    "600598": {"name": "北大荒",   "dps": 0.55, "anchor": 3.8},
+    "603568": {"name": "伟明环保", "dps": 0.60, "anchor": 3.4},
+    "600007": {"name": "中国国贸", "dps": 1.07, "anchor": 6.5},
+    "000429": {"name": "粤高速A",  "dps": 0.604, "anchor": 5.8},
+    "002027": {"name": "分众传媒", "dps": 0.19,  "anchor": 3.5},
+}
 
-def load_state():
-    if STATE_FILE.exists():
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"trigger": {}, "holdings": {}}
+CUTOFF = (datetime.now() - timedelta(days=365)).date()
 
 
-def save_state(s):
-    s["meta"] = s.get("meta", {})
-    s["meta"]["updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(s, f, ensure_ascii=False, indent=2)
+def _to_ts_code(code):
+    if "." in code: return code
+    return f"{code}.{'SH' if code.startswith('6') else 'SZ'}"
 
 
-def git_commit_state():
+def fetch_dps_tushare(code):
+    """Tushare: 取最近12个月分红合计"""
     try:
-        subprocess.run(["git", "config", "user.name", "GitHub Action"], check=True)
-        subprocess.run(["git", "config", "user.email", "action@github.com"], check=True)
-        subprocess.run(["git", "add", "framework_state.json"], check=True)
-        result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
-        if result.returncode != 0:
-            subprocess.run(["git", "commit", "-m", "[auto] 更新股息率事件"], check=True)
-            subprocess.run(["git", "push"], check=True)
-            print("[GIT] framework_state.json 已提交")
+        ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
+        requests.post("https://api.tushare.pro", json={
+            "api_name": "ip_whitelist", "token": TOKEN, "params": {"ip": ip}}, timeout=10)
+
+        ts = _to_ts_code(code)
+        r = requests.post("https://api.tushare.pro", json={
+            "api_name": "dividend",
+            "token": TOKEN,
+            "params": {"ts_code": ts},
+            "fields": "ts_code,cash_div,end_date",
+        }, timeout=30)
+        d = r.json()
+        if d.get("code") != 0:
+            return None, "Tushare失败"
+        rows = d["data"]["items"]
+        total, found = 0.0, 0
+        for row in rows:
+            cash_div = row[1]
+            ed = str(int(row[2]))
+            if not cash_div:
+                continue
+            try:
+                div_date = datetime.strptime(ed[:8], "%Y%m%d").date()
+            except:
+                continue
+            if div_date >= CUTOFF:
+                total += float(cash_div)
+                found += 1
+
+        if found > 0 and total > 0:
+            return round(total, 3), f"12M({found}条)"
+        return None, f"12M无(共{len(rows)}条)"
     except Exception as e:
-        print(f"[GIT] 提交失败: {e}")
+        return None, str(e)[:60]
 
 
 def fetch_price(code):
@@ -58,95 +84,57 @@ def fetch_price(code):
                 price = float(m.group(1).split(",")[3])
                 if price > 0:
                     return price
-        except Exception:
-            if attempt < 2:
-                import time; time.sleep(2)
+        except: pass
     return 0
 
 
 def push(title, content):
-    if not PUSHPLUS_TOKEN:
-        print("[WARN] 无TOKEN"); return
+    if not PUSHPLUS_TOKEN: return
     try:
         payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
-        if PUSHPLUS_TOPIC:
-            payload["topic"] = PUSHPLUS_TOPIC
-        r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
-        print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
-    except Exception as e:
-        print(f"[PushPlus] {e}")
+        if PUSHPLUS_TOPIC: payload["topic"] = PUSHPLUS_TOPIC
+        requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
+    except: pass
 
 
 def main():
     now = datetime.now()
-    print(f"[START] 股息率周报 v2 {now:%Y-%m-%d %H:%M}")
-
-    state = load_state()
-    trigger = state.get("trigger", {})
+    print(f"[START] 股息率周报 v3 {now:%Y-%m-%d}")
 
     rows = []
-    dividend_events = []
-
-    for code, v in trigger.items():
-        dps = v.get("dps", 0)
-        anchor = v.get("anchor_pct", 0)
-        if dps == 0 or anchor == 0:
-            continue
+    for code, v in DIV.items():
+        dps, src = fetch_dps_tushare(code)
+        if dps is None:
+            dps = v["dps"]
+            src = "兜底"
 
         price = fetch_price(code)
-        if price == 0:
-            continue
+        yld = (dps / price * 100) if price > 0 else 0
+        gap = v["anchor"] - yld
+        rows.append((v["name"], code, price, dps, src, yld, v["anchor"], gap))
+        print(f"  {v['name']}: DPS={dps:.3f}[{src}] 价={price:.2f} 息率={yld:.2f}%")
+        time.sleep(0.2)
 
-        yld = dps / price * 100
-        gap = anchor - yld
-        trigger_price = round(dps / anchor * 100, 2)
-
-        rows.append((v["name"], code, price, trigger_price, dps, yld, anchor, gap))
-        print(f"  {v['name']}: DPS={dps:.3f} 价={price:.2f} 息率={yld:.2f}%")
-
-        # 不覆盖触发价，只写事件到 dividend_events
-
-        # 记录股息事件
-        if gap <= 0:
-            dividend_events.append({
-                "code": code,
-                "name": v["name"],
-                "price": price,
-                "yld": round(yld, 2),
-                "anchor": anchor,
-                "trigger_price": trigger_price,
-                "status": "已触发",
-                "excess_pp": round(-gap, 2)
-            })
-        elif gap <= 0.5:
-            dividend_events.append({
-                "code": code,
-                "name": v["name"],
-                "price": price,
-                "yld": round(yld, 2),
-                "anchor": anchor,
-                "trigger_price": trigger_price,
-                "status": "接近",
-                "excess_pp": round(gap, 2)
-            })
-
-    state["trigger"] = trigger
-    state["dividend_events"] = dividend_events
-    save_state(state)
-
+    # ── 推送 ──
     rows.sort(key=lambda x: -x[5])
-
     lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
-             f"> DPS/锚定读自状态文件 ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", ""]
+             f"> DPS：Tushare 12M ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", ""]
 
-    for name, code, price, tp, dps, yld, anchor, gap in rows:
-        status = f"🔴 已触发（超{-gap:.1f}pp）" if gap < 0 else (f"🎯 持平" if gap == 0 else f"🟢 差{gap:.1f}pp")
+    for name, code, price, dps, src, yld, anchor, gap in rows:
+        trigger_price = round(dps / anchor * 100, 2) if dps and anchor else 0
+        diff = trigger_price - price
+        if gap < 0:
+            status = f"🔴 已触发（超{-gap:.1f}pp）"
+        elif gap == 0:
+            status = "🎯 持平"
+        else:
+            status = f"🟢 差{diff:+.2f}元"
         lines.append(f"**{name}**")
-        lines.append(f"> 现价 {price:.2f} 股息率 {yld:.2f}% 锚定 {anchor:.1f}% 触发价 {tp:.2f} | {status}")
+        lines.append(f"现价 {price:.2f} → 触发价 {trigger_price:.2f} | 股息率 {yld:.2f}% | 锚定 {anchor:.1f}% | {status}")
         lines.append("")
 
     triggered = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g <= 0]
-    close = [(n, g, y) for n, _, _, _, _, y, _, g in rows if 0 < g <= 0.5]
+    close = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g > 0 and g <= 0.5]
     if triggered:
         lines.append("### 🔴 已触发")
         for n, g, y in triggered:
@@ -156,13 +144,7 @@ def main():
         for n, g, y in close:
             lines.append(f"- {n}：{y:.2f}%，差{g:.1f}pp")
 
-    lines.append("")
-    lines.append(f"---")
-    lines.append(f"{now:%Y-%m-%d %H:%M} | 联动状态文件")
-
     push(f"💰 股息率周报 {now:%Y.%m.%d}", "\n".join(lines))
-
-    git_commit_state()
     print(f"[DONE] {len(rows)} 只")
 
 
