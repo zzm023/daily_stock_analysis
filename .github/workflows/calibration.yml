@@ -10,9 +10,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: pip install requests
-      - run: ls -la
       - env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
         run: python -u calibration.py
+      - run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add framework_state.json
+          git diff --staged --quiet || git commit -m "校准: DPS自动更新 $(date +%m.%d)"
+          git push
