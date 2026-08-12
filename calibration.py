@@ -1,5 +1,6 @@
 """
-框架状态校准 v2 — Tushare fina_indicator EPS
+框架状态校准 v3 — Tushare fina_indicator EPS + 3年保守折价
+触发价 = min(最新EPS, 3年均EPS) × PE上限
 """
 import os, json, requests, time
 from datetime import datetime
@@ -37,8 +38,11 @@ def tushare_call(api, params, fields):
     return d["data"]["items"]
 
 
-def fetch_eps_map(codes):
-    """fina_indicator: 拿最新年报 EPS"""
+def fetch_eps_3yr(codes):
+    """
+    返回 {code: {"latest": eps_latest, "avg3": eps_3yr_avg}}
+    攒3年年报 2023/2024/2025，至少要2年数据
+    """
     result = {}
     for i, code in enumerate(codes):
         ts = _to_ts(code)
@@ -46,25 +50,34 @@ def fetch_eps_map(codes):
                            "ts_code,end_date,eps")
         if not rows:
             continue
-        best_eps = None
-        best_year = ""
+        annual = {}
         for row in rows:
             ed = str(int(row[1]))
-            eps_val = row[2]
-            if not eps_val or not ed.endswith("1231"):
+            val = row[2]
+            if not val or not ed.endswith("1231"):
                 continue
-            year = ed[:4]
-            if year > best_year:
-                best_year = year
-                best_eps = float(eps_val)
-        if best_eps and best_eps > 0:
-            result[code] = best_eps
+            year = int(ed[:4])
+            annual[year] = float(val)
+
+        years = sorted(annual.keys())
+        if not years:
+            continue
+
+        latest = annual[years[-1]]
+
+        # 取最近3年
+        recent_3 = [annual[y] for y in years[-3:] if y in annual]
+        if len(recent_3) >= 2:
+            avg3 = sum(recent_3) / len(recent_3)
+        else:
+            avg3 = latest
+
+        result[code] = {"latest": latest, "avg3": round(avg3, 2)}
         time.sleep(0.15)
     return result
 
 
 def fetch_dps_map(codes):
-    """dividend: 同一年多条求和"""
     result = {}
     for i, code in enumerate(codes):
         ts = _to_ts(code)
@@ -92,7 +105,7 @@ def fetch_dps_map(codes):
 
 def main():
     now = datetime.now()
-    print(f"[START] 校准 v2 {now:%Y-%m-%d}")
+    print(f"[START] 校准 v3 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -101,29 +114,33 @@ def main():
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
     print(f"  触发清单: {len(codes)} 只")
 
-    eps_map = fetch_eps_map(codes)
+    eps_3yr = fetch_eps_3yr(codes)
     dps_map = fetch_dps_map(codes)
-    print(f"  EPS{len(eps_map)}只 DPS{len(dps_map)}只")
+    print(f"  EPS{len(eps_3yr)}只(含3年均值) DPS{len(dps_map)}只")
 
     changes = []
     for code in codes:
         t = trigger[code]
         old_trigger = t.get("trigger_price", 0)
         pe_upper = t.get("pe_upper", 0)
-        es = eps_map.get(code)
+        e = eps_3yr.get(code)
+        if not e or pe_upper == 0:
+            continue
 
-        if pe_upper > 0 and es:
-            new_trigger = round(pe_upper * es, 2)
-            diff_pct = (new_trigger - old_trigger) / old_trigger * 100 if old_trigger > 0 else 999
+        # 保守折价：取 min(最新, 3年均)
+        eps_use = min(e["latest"], e["avg3"])
+        new_trigger = round(pe_upper * eps_use, 2)
 
-            if abs(diff_pct) > 1:
-                t["trigger_price"] = new_trigger
-                changes.append({
-                    "code": code, "name": t["name"],
-                    "old": old_trigger, "new": new_trigger,
-                    "diff_pct": round(diff_pct, 1),
-                    "eps": es, "pe": pe_upper,
-                })
+        diff_pct = (new_trigger - old_trigger) / old_trigger * 100 if old_trigger > 0 else 999
+        if abs(diff_pct) > 1:
+            t["trigger_price"] = new_trigger
+            changes.append({
+                "code": code, "name": t["name"],
+                "old": old_trigger, "new": new_trigger,
+                "diff_pct": round(diff_pct, 1),
+                "eps_latest": e["latest"], "eps_avg": e["avg3"],
+                "eps_use": eps_use, "pe": pe_upper,
+            })
 
         if code in dps_map:
             t["dps"] = dps_map[code]
@@ -132,18 +149,20 @@ def main():
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-    lines = [f"## 🔧 校准 {now:%m.%d}", "",
-             f"> PE重算{len(changes)}只 | DPS更新{len(dps_map)}只", ""]
+    # 推送
+    lines = [f"## 🔧 校准 v3 {now:%m.%d}", "",
+             f"> EPS(3年均) {len(eps_3yr)}只 | DPS {len(dps_map)}只", "",
+             "**触发价 = min(最新EPS, 3年均EPS) × PE上限**", ""]
     if changes:
-        lines.append("| 股票 | 旧→新 | PE | EPS |")
+        lines.append("| 股票 | 旧→新 | PE | 最新/3年均EPS |")
         lines.append("|:--|:--|:--|:--|")
         for c in changes[:15]:
             arrow = "↑" if c["diff_pct"] > 0 else "↓"
-            lines.append(f"| {c['name']} | {c['old']:.2f}→{c['new']:.2f} {arrow}{abs(c['diff_pct']):.0f}% | {c['pe']} | {c['eps']:.2f} |")
+            lines.append(f"| {c['name']} | {c['old']:.2f}→{c['new']:.2f} {arrow}{abs(c['diff_pct']):.0f}% | {c['pe']} | {c['eps_latest']:.2f}/{c['eps_avg']:.2f}→用{c['eps_use']:.2f} |")
         if len(changes) > 15:
             lines.append(f"| ... | +{len(changes)-15}只 | | |")
 
-    push(f"🔧 校准 {now:%m.%d}", "\n".join(lines))
+    push(f"🔧 校准v3 {now:%m.%d}", "\n".join(lines))
     print(f"[DONE] 变更{len(changes)}只 DPS更新{len(dps_map)}只")
 
 
