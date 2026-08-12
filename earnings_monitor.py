@@ -82,27 +82,30 @@ def analyze_quality(attr, rev_g, profit_g):
 
 
 def fetch_earnings(codes):
-    """
-    Tushare: 取最新半年报(20250630 vs 20240630)
-    返回 {code: {rev, rev_g, profit, profit_g, roe, gm, date}}
-    """
     from tushare_data import _call, auto_whitelist
     auto_whitelist()
 
     ts_codes = [_to_ts_code(c) for c in codes]
+    print(f"  fetch_earnings: {len(ts_codes)} codes, 首3: {ts_codes[:3]}")
 
-    # 拉所有期间
     all_rows = []
     for i in range(0, len(ts_codes), 10):
         batch = ts_codes[i:i + 10]
-        rows = _call("income", {
-            "ts_code": ",".join(batch),
-            "end_date": "20251231",
-        }, "ts_code,end_date,total_revenue,n_income_attr_p")
-        all_rows.extend(rows)
+        try:
+            rows = _call("income", {
+                "ts_code": ",".join(batch),
+                "end_date": "20251231",
+            }, "ts_code,end_date,total_revenue,n_income_attr_p")
+            print(f"    income batch{i//10}: {len(rows)} rows")
+            if rows:
+                print(f"    首行: {rows[0]}")
+            all_rows.extend(rows)
+        except Exception as e:
+            print(f"    income batch{i//10} FAIL: {e}")
         time.sleep(0.3)
 
-    # 按期间分组
+    print(f"  total rows: {len(all_rows)}")
+
     cur_period = {}
     prev_period = {}
     for row in all_rows:
@@ -115,22 +118,7 @@ def fetch_earnings(codes):
         elif ed == "20240630":
             prev_period[code] = (rev, profit)
 
-    # ROE 从 fina_indicator
-    roe_map = {}
-    try:
-        for i in range(0, len(ts_codes), 10):
-            batch = ts_codes[i:i + 10]
-            rows = _call("fina_indicator", {
-                "ts_code": ",".join(batch),
-            }, "ts_code,end_date,roe")
-            for row in rows:
-                code = _from_ts_code(row[0])
-                ed = str(int(row[2])) if row[2] else ""
-                if ed.startswith("2025") and row[1]:
-                    roe_map[code] = float(row[1])
-            time.sleep(0.3)
-    except:
-        pass
+    print(f"  cur(20250630): {len(cur_period)} codes, prev(20240630): {len(prev_period)} codes")
 
     result = {}
     for code in codes:
@@ -138,16 +126,12 @@ def fetch_earnings(codes):
             continue
         rev, profit = cur_period[code]
         prev_rev, prev_profit = prev_period.get(code, (None, None))
-
         rev_g = ((rev - prev_rev) / abs(prev_rev) * 100) if rev and prev_rev and prev_rev != 0 else None
         profit_g = ((profit - prev_profit) / abs(prev_profit) * 100) if profit and prev_profit and prev_profit != 0 else None
-
         result[code] = {
             "rev": rev, "rev_g": rev_g,
             "profit": profit, "profit_g": profit_g,
-            "roe": roe_map.get(code),
-            "gm": None,
-            "date": "",
+            "roe": None, "gm": None, "date": "",
         }
 
     return result
