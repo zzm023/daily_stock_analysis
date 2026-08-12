@@ -68,27 +68,46 @@ def get_profit_growth(codes):
 
 
 def get_dividends(codes):
+    """
+    取最新年度每股分红（全年合计）
+    返回 {code: dps}
+    """
+    ts_codes = [_to_ts_code(c) for c in codes]
+    all_rows = []
+
+    for i in range(0, len(ts_codes), 10):
+        batch = ts_codes[i:i+10]
+        rows = _call("dividend", {
+            "ts_code": ",".join(batch),
+        }, "ts_code,cash_div,stk_div,end_date")
+        all_rows.extend(rows)
+        if i + 10 < len(ts_codes):
+            time.sleep(0.5)
+
+    # 按股票+年度分组，同一年所有分红求和
+    year_total = {}
+    for row in all_rows:
+        code = _from_ts_code(row[0])
+        cash_div = row[1]
+        ed = str(int(row[3]))
+        if not cash_div or not ed.endswith("1231"):
+            continue
+        val = float(cash_div)
+        year = ed[:4]
+        key = (code, year)
+        year_total[key] = year_total.get(key, 0) + val
+
+    # 取最新有数据的年份
     result = {}
     for code in codes:
-        ts = _to_ts_code(code)
-        rows = _call("dividend", {
-            "ts_code": ts,
-        }, "ts_code,cash_div,stk_div,end_date")
-        if not rows:
-            continue
         best_year = ""
         best_val = 0
-        for row in rows:
-            # row: [ts_code, cash_div, stk_div, end_date]
-            cash_div = row[1]
-            ed = str(int(row[3]))
-            if not cash_div or not ed.endswith("1231"):
-                continue
-            val = float(cash_div)
-            if val > 0 and ed[:4] > best_year:
-                best_year = ed[:4]
-                best_val = val
+        for (c, y), v in year_total.items():
+            if c == code and y > best_year and v > 0:
+                best_year = y
+                best_val = v
         if best_val > 0:
-            result[code] = best_val
-        time.sleep(0.12)
+            # Round to avoid floating point noise
+            result[code] = round(best_val, 3)
+
     return result
