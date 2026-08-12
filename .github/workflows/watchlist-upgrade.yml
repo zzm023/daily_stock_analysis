@@ -23,6 +23,7 @@ jobs:
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: python watchlist_upgrade.py
       - name: 提交分类
         run: |
