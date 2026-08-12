@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 STATE_FILE = Path(__file__).parent / "framework_state.json"
-TOKEN = os.environ.get("TUSHARE_TOKEN", "PUSHPLUS_TOKEN", "")
+TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 
 
 def tushare_call(api, params, fields):
