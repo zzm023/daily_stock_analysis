@@ -1,7 +1,7 @@
 """
-全市场扫描器 v3
+全市场扫描器 v4
 每周一从 CSI 300 + CSI 500 中按六类框架筛选候选 → PushPlus
-分批查询，排除已在框架中的 52 只
+用 trade_cal 动态探测最近交易日，避免日期错位
 """
 
 import os, json, requests
@@ -91,13 +91,36 @@ def ts_batch(api_name, fields, codes, **params):
         f, it = ts_df(api_name, fields, ts_code=",".join(batch), **params)
         all_fields = f
         all_items.extend(it)
-        print(f"    {api_name} 批 {i//100+1}: {len(it)} 条")
     return all_fields, all_items
+
+
+def get_latest_trade_date(now):
+    """用 trade_cal 探测最近交易日，往前找 3 年"""
+    end = now.strftime("%Y%m%d")
+    start = (now - timedelta(days=1100)).strftime("%Y%m%d")
+    fields, items = ts_df("trade_cal", "cal_date,is_open", exchange="SSE",
+                          start_date=start, end_date=end)
+    if not fields:
+        return None
+    fc = {f: i for i, f in enumerate(fields)}
+    open_days = []
+    for row in items:
+        if row[fc["is_open"]] == 1:
+            open_days.append(row[fc["cal_date"]])
+    open_days.sort()
+    return open_days[-1] if open_days else None
 
 
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 全市场扫描 v3 {now:%Y-%m-%d}")
+    print(f"[START] 全市场扫描 v4 {now:%Y-%m-%d}")
+
+    # ── 0. 探测最近交易日 ──
+    latest_td = get_latest_trade_date(now)
+    print(f"  [0] 最近交易日: {latest_td}")
+    if not latest_td:
+        push(f"🔍 框架扫描 {now:%m.%d}", "## 🔍 框架扫描失败\n\ntrade_cal 无法获取交易日，请检查 Tushare 积分。")
+        return
 
     # ── 1. 成分股 ──
     constituents = set()
@@ -131,50 +154,49 @@ def main():
     print(f"  [2] 有效标的: {len(stocks)} 只")
 
     if len(stocks) == 0:
-        push(f"🔍 框架扫描 {now:%m.%d}", "## 🔍 框架扫描失败\n\n成分股或基础信息接口无数据。")
+        push(f"🔍 框架扫描 {now:%m.%d}", "## 🔍 框架扫描失败\n\n基础信息无数据。")
         return
 
     code_list = list(stocks.keys())
-    end = now.strftime("%Y%m%d")
-    start = (now - timedelta(days=10)).strftime("%Y%m%d")
 
-    # ── 3. daily_basic：PE/PB/股息率（往前推10天，取最新） ──
-    print("  拉取 daily_basic ...")
+    # ── 3. daily_basic：用真实最近交易日 ──
+    print(f"  拉取 daily_basic @ {latest_td} ...")
     fields, items = ts_batch("daily_basic",
-                             "ts_code,trade_date,pe,pb,total_mv,dv_ratio",
-                             code_list, start_date=start, end_date=end)
-    fc = {f: i for i, f in enumerate(fields)}
-    latest = {}
-    for row in items:
-        code = row[fc["ts_code"]].split(".")[0]
-        td = row[fc["trade_date"]]
-        if code not in stocks:
-            continue
-        if code not in latest or td > latest[code][0]:
-            latest[code] = (td, row[fc["pe"]], row[fc["pb"]],
-                            row[fc["total_mv"]], row[fc["dv_ratio"]])
-
-    for code, (td, pe, pb, mv, dv) in latest.items():
-        stocks[code]["pe"] = pe if pe else None
-        stocks[code]["pb"] = pb if pb else None
-        stocks[code]["mv"] = mv if mv else None
-        stocks[code]["dv"] = dv if dv else None
-    print(f"  [3] 估值数据覆盖: {len(latest)} 只")
-
-    # ── 4. fina_indicator：ROE ──
-    fy = str(int(now.strftime("%Y")) - 1)
-    print("  拉取 fina_indicator ...")
-    fields, items = ts_batch("fina_indicator", "ts_code,roe",
-                             code_list, end_date=f"{fy}1231")
+                             "ts_code,pe,pb,total_mv,dv_ratio",
+                             code_list, trade_date=latest_td)
     fc = {f: i for i, f in enumerate(fields)}
     for row in items:
         code = row[fc["ts_code"]].split(".")[0]
         if code in stocks:
-            try:
-                stocks[code]["roe"] = float(row[fc["roe"]])
-            except:
-                stocks[code]["roe"] = None
-    print(f"  [4] ROE 覆盖: {len(items)} 条")
+            stocks[code]["pe"] = row[fc["pe"]] if row[fc["pe"]] else None
+            stocks[code]["pb"] = row[fc["pb"]] if row[fc["pb"]] else None
+            stocks[code]["mv"] = row[fc["total_mv"]] if row[fc["total_mv"]] else None
+            stocks[code]["dv"] = row[fc["dv_ratio"]] if row[fc["dv_ratio"]] else None
+    print(f"  [3] 估值数据: {len(items)} 条")
+
+    # ── 4. fina_indicator：取最近年报 ROE ──
+    td_year = int(latest_td[:4])
+    start_r = f"{td_year-3}0101"
+    end_r = f"{td_year}1231"
+    print(f"  拉取 fina_indicator @ {start_r}~{end_r} ...")
+    fields, items = ts_batch("fina_indicator", "ts_code,end_date,roe",
+                             code_list, start_date=start_r, end_date=end_r)
+    fc = {f: i for i, f in enumerate(fields)}
+    roe_latest = {}
+    for row in items:
+        code = row[fc["ts_code"]].split(".")[0]
+        ed = row[fc["end_date"]]
+        if code not in stocks:
+            continue
+        if code not in roe_latest or ed > roe_latest[code][0]:
+            roe_latest[code] = (ed, row[fc["roe"]])
+
+    for code, (ed, roe) in roe_latest.items():
+        try:
+            stocks[code]["roe"] = float(roe)
+        except:
+            stocks[code]["roe"] = None
+    print(f"  [4] ROE 覆盖: {len(roe_latest)} 只")
 
     # ── 5. 筛选 + 分类 ──
     results = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
@@ -229,6 +251,7 @@ def main():
     lines = [
         f"## 🔍 框架扫描 {now:%m.%d}",
         f"CSI300+CSI500 共{len(constituents)}只 → 命中 **{total}** 只",
+        f"数据截至 {latest_td}",
         "",
     ]
 
