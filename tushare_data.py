@@ -49,6 +49,7 @@ def get_profit_growth(codes):
             continue
         annual = {}
         for row in rows:
+            # row: [ts_code, end_date, n_income_attr_p]
             ed = str(int(row[1]))
             val = row[2]
             if not val or not ed.endswith("1231"):
@@ -78,8 +79,9 @@ def get_dividends(codes):
         best_year = ""
         best_val = 0
         for row in rows:
+            # row: [ts_code, cash_div, stk_div, end_date]
             cash_div = row[1]
-            ed = str(int(row[2]))
+            ed = str(int(row[3]))
             if not cash_div or not ed.endswith("1231"):
                 continue
             val = float(cash_div)
