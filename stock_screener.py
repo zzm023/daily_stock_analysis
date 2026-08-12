@@ -1,7 +1,6 @@
 """
-全市场扫描器 v5
-每周一从 CSI 300 + CSI 500 中按六类框架筛选候选 → PushPlus
-修复 ts_code 后缀问题
+全市场扫描器 v6 - 诊断版
+定位 daily_basic 返回 0 条的原因
 """
 
 import os, json, requests
@@ -53,7 +52,6 @@ CAT_MAP = {
 
 
 def to_ts_code(code):
-    """6位数字代码 → 带交易所后缀的完整 ts_code"""
     if code.startswith("6"):
         return code + ".SH"
     elif code.startswith(("0", "3")):
@@ -77,8 +75,16 @@ def push(title, content):
         print(f"  [Push] {e}")
 
 
+def ts_raw(api_name, fields, **params):
+    """返回原始 json，不解析，用于诊断"""
+    r = requests.post("http://api.tushare.pro", json={
+        "api_name": api_name, "token": TUSHARE_TOKEN,
+        "params": {**params, "fields": fields},
+    }, timeout=30)
+    return r.json()
+
+
 def ts_df(api_name, fields, **params):
-    """返回 (fields, items)，带错误日志"""
     r = requests.post("http://api.tushare.pro", json={
         "api_name": api_name, "token": TUSHARE_TOKEN,
         "params": {**params, "fields": fields},
@@ -94,7 +100,6 @@ def ts_df(api_name, fields, **params):
 
 
 def ts_batch(api_name, fields, codes, **params):
-    """按每批 100 个代码分批查询，自动补后缀，合并结果"""
     all_fields = None
     all_items = []
     for i in range(0, len(codes), 100):
@@ -106,7 +111,6 @@ def ts_batch(api_name, fields, codes, **params):
 
 
 def get_latest_trade_date(now):
-    """用 trade_cal 探测最近交易日，往前找 3 年"""
     end = now.strftime("%Y%m%d")
     start = (now - timedelta(days=1100)).strftime("%Y%m%d")
     fields, items = ts_df("trade_cal", "cal_date,is_open", exchange="SSE",
@@ -124,171 +128,49 @@ def get_latest_trade_date(now):
 
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 全市场扫描 v5 {now:%Y-%m-%d}")
+    print(f"[START] 全市场扫描 v6 诊断 {now:%Y-%m-%d}")
 
-    # ── 0. 探测最近交易日 ──
     latest_td = get_latest_trade_date(now)
     print(f"  [0] 最近交易日: {latest_td}")
-    if not latest_td:
-        push(f"🔍 框架扫描 {now:%m.%d}", "## 🔍 框架扫描失败\n\ntrade_cal 无法获取交易日。")
-        return
 
-    # ── 1. 成分股 ──
-    constituents = set()
-    for idx in ["000300.SH", "000905.SH"]:
-        fields, items = ts_df("index_weight", "index_code,con_code,trade_date",
-                              index_code=idx)
-        try:
-            col = fields.index("con_code")
-        except ValueError:
-            col = 0
-        for row in items:
-            constituents.add(row[col].split(".")[0])
+    # ===== 诊断开始 =====
+    print("=== 诊断 ===")
+    # 1. 单股 + 无 dv_ratio + trade_date
+    d1 = ts_raw("daily_basic", "ts_code,pe,pb,total_mv",
+                ts_code="000001.SZ", trade_date=latest_td)
+    print(f"  测1 [无dv_ratio+trade_date]: code={d1.get('code')}, "
+          f"条数={len(d1.get('data',{}).get('items',[]))}, msg={d1.get('msg')}")
 
-    print(f"  [1] 成分股总计: {len(constituents)} 只")
+    # 2. 单股 + 有 dv_ratio + trade_date
+    d2 = ts_raw("daily_basic", "ts_code,pe,pb,total_mv,dv_ratio",
+                ts_code="000001.SZ", trade_date=latest_td)
+    print(f"  测2 [有dv_ratio+trade_date]: code={d2.get('code')}, "
+          f"条数={len(d2.get('data',{}).get('items',[]))}, msg={d2.get('msg')}")
 
-    # ── 2. 基础信息 ──
-    fields, items = ts_df("stock_basic",
-                          "ts_code,name,industry,list_date",
-                          list_status="L")
-    fc = {f: i for i, f in enumerate(fields)}
-    stocks = {}
-    for row in items:
-        code = row[fc["ts_code"]].split(".")[0]
-        if constituents and code not in constituents:
-            continue
-        ld = row[fc["list_date"]] if fc.get("list_date") is not None else ""
-        if ld and ld > "20230701":
-            continue
-        stocks[code] = {"name": row[fc["name"]], "industry": row[fc["industry"]]}
+    # 3. 单股 + 无 dv_ratio + 日期范围
+    d3 = ts_raw("daily_basic", "ts_code,pe,pb,total_mv",
+                ts_code="000001.SZ",
+                start_date=(now - timedelta(days=15)).strftime("%Y%m%d"),
+                end_date=latest_td)
+    print(f"  测3 [无dv_ratio+日期范围]: code={d3.get('code')}, "
+          f"条数={len(d3.get('data',{}).get('items',[]))}, msg={d3.get('msg')}")
 
-    print(f"  [2] 有效标的: {len(stocks)} 只")
+    # 4. 单股 + 无 dv_ratio + 前一天
+    d4 = ts_raw("daily_basic", "ts_code,pe,pb,total_mv",
+                ts_code="000001.SZ", trade_date="20260811")
+    print(f"  测4 [无dv_ratio+0811]: code={d4.get('code')}, "
+          f"条数={len(d4.get('data',{}).get('items',[]))}, msg={d4.get('msg')}")
 
-    if len(stocks) == 0:
-        push(f"🔍 框架扫描 {now:%m.%d}", "## 🔍 框架扫描失败\n\n基础信息无数据。")
-        return
+    # 5. 单股 + 无 dv_ratio + 不传日期
+    d5 = ts_raw("daily_basic", "ts_code,pe,pb,total_mv",
+                ts_code="000001.SZ")
+    print(f"  测5 [无dv_ratio+无日期]: code={d5.get('code')}, "
+          f"条数={len(d5.get('data',{}).get('items',[]))}, msg={d5.get('msg')}")
+    print("=== 诊断结束 ===")
 
-    code_list = list(stocks.keys())
-
-    # ── 3. daily_basic ──
-    print(f"  拉取 daily_basic @ {latest_td} ...")
-    fields, items = ts_batch("daily_basic",
-                             "ts_code,pe,pb,total_mv,dv_ratio",
-                             code_list, trade_date=latest_td)
-    fc = {f: i for i, f in enumerate(fields)}
-    for row in items:
-        code = row[fc["ts_code"]].split(".")[0]
-        if code in stocks:
-            stocks[code]["pe"] = row[fc["pe"]] if row[fc["pe"]] else None
-            stocks[code]["pb"] = row[fc["pb"]] if row[fc["pb"]] else None
-            stocks[code]["mv"] = row[fc["total_mv"]] if row[fc["total_mv"]] else None
-            stocks[code]["dv"] = row[fc["dv_ratio"]] if row[fc["dv_ratio"]] else None
-    print(f"  [3] 估值数据: {len(items)} 条")
-
-    # ── 4. fina_indicator：最近年报 ROE ──
-    td_year = int(latest_td[:4])
-    start_r = f"{td_year-3}0101"
-    end_r = f"{td_year}1231"
-    print(f"  拉取 fina_indicator @ {start_r}~{end_r} ...")
-    fields, items = ts_batch("fina_indicator", "ts_code,end_date,roe",
-                             code_list, start_date=start_r, end_date=end_r)
-    fc = {f: i for i, f in enumerate(fields)}
-    roe_latest = {}
-    for row in items:
-        code = row[fc["ts_code"]].split(".")[0]
-        ed = row[fc["end_date"]]
-        if code not in stocks:
-            continue
-        if code not in roe_latest or ed > roe_latest[code][0]:
-            roe_latest[code] = (ed, row[fc["roe"]])
-
-    for code, (ed, roe) in roe_latest.items():
-        try:
-            stocks[code]["roe"] = float(roe)
-        except:
-            stocks[code]["roe"] = None
-    print(f"  [4] ROE 覆盖: {len(roe_latest)} 只")
-
-    # ── 5. 筛选 + 分类 ──
-    results = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
-    for code, s in stocks.items():
-        name = s["name"]
-        if name in EXISTING:
-            continue
-
-        pe = s.get("pe")
-        pb = s.get("pb")
-        roe = s.get("roe")
-        dv = s.get("dv")
-        ind = s.get("industry", "")
-
-        if pe is None or pe <= 0 or pe > 50:
-            continue
-        if pb is None or pb <= 0 or pb > 8:
-            continue
-        if roe is None or roe < 5:
-            continue
-
-        matched = False
-
-        if ind in CAT_MAP[1] and dv and dv > 2.0 and pe < 20:
-            results[1].append((name, code, pe, pb, roe, dv, ind))
-            matched = True
-
-        if dv and dv > 3.5 and pe < 15 and not matched:
-            results[2].append((name, code, pe, pb, roe, dv, ind))
-            matched = True
-
-        if ind in CAT_MAP[4] and roe > 10 and pe < 25 and not matched:
-            results[4].append((name, code, pe, pb, roe, dv, ind))
-            matched = True
-
-        if ind in CAT_MAP[5] and roe > 10 and pe < 30 and not matched:
-            results[5].append((name, code, pe, pb, roe, dv, ind))
-            matched = True
-
-        if ind in CAT_MAP[6] and roe > 10 and pe < 30 and not matched:
-            results[6].append((name, code, pe, pb, roe, dv, ind))
-            matched = True
-
-        if pb < 1.5 and roe > 0 and not matched:
-            results[3].append((name, code, pe, pb, roe, dv, ind))
-
-    # ── 6. 推送 ──
-    total = sum(len(v) for v in results.values())
-    cat_names = {1: "①永续债", 2: "②高息成长", 3: "③周期拐点",
-                 4: "④全球寡头", 5: "⑤品牌心智", 6: "⑥小众冠军"}
-
-    lines = [
-        f"## 🔍 框架扫描 {now:%m.%d}",
-        f"CSI300+CSI500 共{len(constituents)}只 → 命中 **{total}** 只",
-        f"数据截至 {latest_td}",
-        "",
-    ]
-
-    for cat_id in [1, 2, 3, 4, 5, 6]:
-        if not results[cat_id]:
-            continue
-        lines.append(f"### {cat_names[cat_id]}（{len(results[cat_id])}只）")
-        lines.append("")
-        for name, code, pe, pb, roe, dv, ind in results[cat_id][:8]:
-            parts = [f"- **{name}**({code})"]
-            if pe: parts.append(f"PE{pe:.1f}")
-            if pb: parts.append(f"PB{pb:.2f}")
-            if roe: parts.append(f"ROE{roe:.1f}%")
-            if dv: parts.append(f"息{dv:.1f}%")
-            parts.append(f"| {ind}")
-            lines.append(" ".join(parts))
-        lines.append("")
-
-    if total == 0:
-        lines.append("无新候选。框架外无低估标的，现金为王。")
-
-    lines.append("---")
-    lines.append(f"自动扫描，仅筛选不荐买 | {now:%m-%d %H:%M}")
-
-    push(f"🔍 框架扫描 {now:%m.%d}（{total}只）", "\n".join(lines))
-    print(f"[DONE] 命中 {total} 只")
+    # 诊断后先退出，不发推送
+    print("[DONE] 诊断完成，请把以上日志发我")
+    return
 
 
 if __name__ == "__main__":
