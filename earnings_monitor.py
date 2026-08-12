@@ -1,5 +1,5 @@
 """
-财报日历 v3 — Tushare debug
+财报日历 v3 — Tushare版
 """
 import os, json, requests, time
 from datetime import datetime
@@ -26,7 +26,6 @@ ALL_STOCKS = [
 CODE2NAME = {c: n for c, n, _ in ALL_STOCKS}
 CODE2ATTR = {c: a for c, _, a in ALL_STOCKS}
 ATTR_LABEL = {"①":"永续债","②":"高息","③":"周期","④":"寡头","⑤":"品牌","⑥":"小众","⚡":"科技"}
-
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
@@ -34,10 +33,6 @@ PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 def _to_ts_code(code):
     if "." in code: return code
     return f"{code}.{'SH' if code.startswith('6') else 'SZ'}"
-
-
-def _from_ts_code(ts_code):
-    return ts_code.split(".")[0]
 
 
 def load_state():
@@ -81,48 +76,41 @@ def analyze_quality(attr, rev_g, profit_g):
 
 
 def fetch_earnings(codes):
-    # 白名单
+    """逐只调用 Tushare income，取 2025H1 vs 2024H1"""
     ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
     requests.post("https://api.tushare.pro", json={
         "api_name": "ip_whitelist", "token": TOKEN, "params": {"ip": ip}}, timeout=10)
 
-    ts_codes = [_to_ts_code(c) for c in codes]
-    all_rows = []
+    cur_period = {}
+    prev_period = {}
 
-    for i in range(0, len(ts_codes), 10):
-        batch = ts_codes[i:i + 10]
+    for i, code in enumerate(codes):
+        ts = _to_ts_code(code)
         payload = {
             "api_name": "income",
             "token": TOKEN,
-            "params": {"ts_code": ",".join(batch), "end_date": "20251231"},
+            "params": {"ts_code": ts, "end_date": "20251231"},
             "fields": "ts_code,end_date,total_revenue,n_income_attr_p",
         }
-        r = requests.post("https://api.tushare.pro", json=payload, timeout=30)
-        d = r.json()
-        code = d.get("code")
-        msg = d.get("msg", "")
-        print(f"    batch{i//10}: code={code} msg={msg}")
-        if code != 0:
-            print(f"      → {batch}")
-            continue
-        items = d["data"]["items"]
-        print(f"      → {len(items)} rows, 首行: {items[0] if items else 'EMPTY'}")
-        all_rows.extend(items)
-        time.sleep(0.4)
+        try:
+            r = requests.post("https://api.tushare.pro", json=payload, timeout=30)
+            d = r.json()
+            if d.get("code") != 0:
+                continue
+            rows = d["data"]["items"]
+            for row in rows:
+                ed = str(int(row[1]))
+                rev = float(row[2]) if row[2] else None
+                profit = float(row[3]) if row[3] else None
+                if ed == "20250630":
+                    cur_period[code] = (rev, profit)
+                elif ed == "20240630":
+                    prev_period[code] = (rev, profit)
+        except Exception as e:
+            print(f"    {code} FAIL: {e}")
+        time.sleep(0.2)
 
-    cur_period = {}
-    prev_period = {}
-    for row in all_rows:
-        code = _from_ts_code(row[0])
-        ed = str(int(row[1]))
-        rev = float(row[2]) if row[2] else None
-        profit = float(row[3]) if row[3] else None
-        if ed == "20250630":
-            cur_period[code] = (rev, profit)
-        elif ed == "20240630":
-            prev_period[code] = (rev, profit)
-
-    print(f"  → cur(20250630): {len(cur_period)} codes, prev(20240630): {len(prev_period)} codes")
+    print(f"  → 2025H1: {len(cur_period)} codes, 2024H1: {len(prev_period)} codes")
 
     result = {}
     for code in codes:
@@ -155,9 +143,10 @@ def main():
     data = fetch_earnings(active_codes)
     print(f"  Tushare 半年报 {len(data)} 只")
 
-    reported = [(c, CODE2NAME.get(c,c), CODE2ATTR.get(c,"?"), data[c]) for c in data]
+    reported = [(c, CODE2NAME.get(c, c), CODE2ATTR.get(c, "?"), data[c]) for c in data]
+    no_info = [(c, CODE2NAME.get(c, c), CODE2ATTR.get(c, "?")) for c in active_codes if c not in data]
 
-    # 写事件
+    # 写事件到 state
     earnings_events = []
     for code, name, attr, y in reported:
         judgment = analyze_quality(attr, y.get("rev_g"), y.get("profit_g"))
@@ -171,8 +160,9 @@ def main():
     state["earnings_events"] = earnings_events
     save_state(state)
 
+    # 推送
     lines = [f"## 📅 财报联动 — {now:%Y.%m.%d}", "",
-             f"> 触发清单 | Tushare半年报 {len(reported)}只", ""]
+             f"> 触发清单 | 已披露{len(reported)}只 | 待披露{len(no_info)}只", ""]
     if reported:
         lines.append("### 📊 已披露（2025H1 vs 2024H1）\n")
         for code, name, attr, y in reported:
@@ -183,6 +173,11 @@ def main():
             judgment = analyze_quality(attr, y["rev_g"], y["profit_g"])
             lines.append(f"**{name}** [{ATTR_LABEL.get(attr, attr)}] {rev_g} {pf_g} | {judgment}")
             lines.append(f"> 营收{rev} 净利{pf}\n")
+    if no_info:
+        lines.append("### ⏳ 待披露\n")
+        for code, name, attr in no_info:
+            lines.append(f"- {name} [{ATTR_LABEL.get(attr, attr)}]")
+        lines.append("")
     lines.append(f"> Tushare | {now:%m.%d %H:%M}")
     push(f"📅 财报监控 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"[DONE]")
