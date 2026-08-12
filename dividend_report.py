@@ -25,7 +25,7 @@ DIV = {
     "002027": {"name": "分众传媒", "dps": 0.19,  "anchor": 3.5},
 }
 
-CUTOFF = (datetime.now() - timedelta(days=365)).date()
+CUTOFF = (datetime.now() - timedelta(days=540)).date()
 
 
 def _to_ts_code(code):
