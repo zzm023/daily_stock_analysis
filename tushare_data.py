@@ -1,5 +1,6 @@
 """
-Tushare 公用数据层 v1-debug2
+Tushare 公用数据层 v1
+自动白名单 + 利润同比 + 分红
 """
 import os, requests, json, time
 from pathlib import Path
@@ -13,27 +14,23 @@ def _call(api_name, params=None, fields=""):
         payload["fields"] = fields
     r = requests.post("https://api.tushare.pro", json=payload, timeout=30)
     data = r.json()
-    code = data.get("code")
-    if code != 0:
-        print(f"  [{api_name}] FAIL: {data.get('msg')}")
-        return []
-    items = data["data"]["items"]
-    print(f"  [{api_name}] {len(items)}行")
-    if items:
-        print(f"    首行: {items[0]}")
-    return items
+    if data.get("code") != 0:
+        raise Exception(f"{api_name}: {data.get('msg')}")
+    return data["data"]["items"]
 
 
 def auto_whitelist():
     ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
     r = requests.post("https://api.tushare.pro", json={
-        "api_name": "ip_whitelist", "token": TOKEN, "params": {"ip": ip},
+        "api_name": "ip_whitelist",
+        "token": TOKEN,
+        "params": {"ip": ip},
     }, timeout=10)
-    print(f"  白名单: {r.json().get('msg')}")
 
 
 def _to_ts_code(code):
-    if "." in code: return code
+    if "." in code:
+        return code
     return f"{code}.{'SH' if code.startswith('6') else 'SZ'}"
 
 
@@ -42,6 +39,10 @@ def _from_ts_code(ts_code):
 
 
 def get_profit_growth(codes):
+    """
+    取最近两年年报净利润同比
+    返回 {code: profit_yoy%}
+    """
     ts_codes = [_to_ts_code(c) for c in codes]
     all_rows = []
 
@@ -49,12 +50,13 @@ def get_profit_growth(codes):
         batch = ts_codes[i:i+10]
         rows = _call("income", {
             "ts_code": ",".join(batch),
+            "end_date": "20251231",
         }, "ts_code,end_date,n_income_attr_p")
         all_rows.extend(rows)
         if i + 10 < len(ts_codes):
             time.sleep(0.5)
 
-    # 筛选年报
+    # 只取年报（end_date 以 1231 结尾）
     annual = {}
     for row in all_rows:
         code = _from_ts_code(row[0])
@@ -66,8 +68,6 @@ def get_profit_growth(codes):
         if code not in annual:
             annual[code] = {}
         annual[code][year] = max(annual[code].get(year, 0), float(val))
-
-    print(f"  年报覆盖: {list(annual.keys())[:5]}...")
 
     result = {}
     for code in codes:
@@ -84,6 +84,10 @@ def get_profit_growth(codes):
 
 
 def get_dividends(codes):
+    """
+    取最新年度每股分红（cash_div > 0，最新年度）
+    返回 {code: dps}
+    """
     ts_codes = [_to_ts_code(c) for c in codes]
     all_rows = []
 
@@ -96,7 +100,6 @@ def get_dividends(codes):
         if i + 10 < len(ts_codes):
             time.sleep(0.5)
 
-    # 只取年度，cash_div > 0
     annual = {}
     for row in all_rows:
         code = _from_ts_code(row[0])
@@ -111,5 +114,4 @@ def get_dividends(codes):
         if code not in annual or year > annual[code][0]:
             annual[code] = (year, val)
 
-    print(f"  分红覆盖: {list(annual.keys())[:5]}...")
     return {code: val for code, (year, val) in annual.items()}
