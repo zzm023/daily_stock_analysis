@@ -1,7 +1,7 @@
 """
-全市场扫描器 v4
+全市场扫描器 v5
 每周一从 CSI 300 + CSI 500 中按六类框架筛选候选 → PushPlus
-用 trade_cal 动态探测最近交易日，避免日期错位
+修复 ts_code 后缀问题
 """
 
 import os, json, requests
@@ -52,6 +52,17 @@ CAT_MAP = {
 }
 
 
+def to_ts_code(code):
+    """6位数字代码 → 带交易所后缀的完整 ts_code"""
+    if code.startswith("6"):
+        return code + ".SH"
+    elif code.startswith(("0", "3")):
+        return code + ".SZ"
+    elif code.startswith(("8", "4")):
+        return code + ".BJ"
+    return code
+
+
 def push(title, content):
     if not PUSHPLUS_TOKEN:
         return
@@ -83,11 +94,11 @@ def ts_df(api_name, fields, **params):
 
 
 def ts_batch(api_name, fields, codes, **params):
-    """按每批 100 个代码分批查询，合并结果"""
+    """按每批 100 个代码分批查询，自动补后缀，合并结果"""
     all_fields = None
     all_items = []
     for i in range(0, len(codes), 100):
-        batch = codes[i:i+100]
+        batch = [to_ts_code(c) for c in codes[i:i+100]]
         f, it = ts_df(api_name, fields, ts_code=",".join(batch), **params)
         all_fields = f
         all_items.extend(it)
@@ -113,13 +124,13 @@ def get_latest_trade_date(now):
 
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 全市场扫描 v4 {now:%Y-%m-%d}")
+    print(f"[START] 全市场扫描 v5 {now:%Y-%m-%d}")
 
     # ── 0. 探测最近交易日 ──
     latest_td = get_latest_trade_date(now)
     print(f"  [0] 最近交易日: {latest_td}")
     if not latest_td:
-        push(f"🔍 框架扫描 {now:%m.%d}", "## 🔍 框架扫描失败\n\ntrade_cal 无法获取交易日，请检查 Tushare 积分。")
+        push(f"🔍 框架扫描 {now:%m.%d}", "## 🔍 框架扫描失败\n\ntrade_cal 无法获取交易日。")
         return
 
     # ── 1. 成分股 ──
@@ -159,7 +170,7 @@ def main():
 
     code_list = list(stocks.keys())
 
-    # ── 3. daily_basic：用真实最近交易日 ──
+    # ── 3. daily_basic ──
     print(f"  拉取 daily_basic @ {latest_td} ...")
     fields, items = ts_batch("daily_basic",
                              "ts_code,pe,pb,total_mv,dv_ratio",
@@ -174,7 +185,7 @@ def main():
             stocks[code]["dv"] = row[fc["dv_ratio"]] if row[fc["dv_ratio"]] else None
     print(f"  [3] 估值数据: {len(items)} 条")
 
-    # ── 4. fina_indicator：取最近年报 ROE ──
+    # ── 4. fina_indicator：最近年报 ROE ──
     td_year = int(latest_td[:4])
     start_r = f"{td_year-3}0101"
     end_r = f"{td_year}1231"
