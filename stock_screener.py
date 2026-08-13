@@ -1,6 +1,13 @@
 """
-全市场扫描器 v7 - 最终版
-daily_basic 改全市场单日查询，本地过滤成分股
+全市场扫描器 v7.1
+每周一从 CSI 300 + CSI 500 中按六类框架筛选候选 → PushPlus
+- daily_basic 用全市场单日查询（不支持 ts_code 批量）
+- fina_indicator 用 ts_code 批量（每批100个）
+- 用 trade_cal 动态探测最近交易日
+- 排除已在框架中的 52 只
+- v7.1：排除保险股（PE假便宜，需PEV估值，本扫描器不处理）
+
+运行状态：✅ 已跑通（2026-08-12 命中10只）
 """
 
 import os, json, requests
@@ -20,7 +27,7 @@ EXISTING = {
     "万华化学", "宝钢股份", "中信特钢", "龙佰集团",
     "温氏股份", "牧原股份", "北大荒",
     "中联重科", "安徽合力",
-    "中国太保", "中国平安",
+    "中国太保", "中国平安", "新华保险", "中国人寿", "中国人保",
     "京沪高铁", "上港集团", "中国国贸", "宁沪高速",
     "伟明环保", "凌霄泵业", "华荣股份", "思维列控",
     "国电南瑞", "宝信软件", "时代电气", "华测导航",
@@ -91,7 +98,6 @@ def ts_df(api_name, fields, **params):
 
 
 def ts_batch(api_name, fields, codes, **params):
-    """fina_indicator 等支持批量 ts_code 的接口用"""
     all_fields = None
     all_items = []
     for i in range(0, len(codes), 100):
@@ -120,16 +126,14 @@ def get_latest_trade_date(now):
 
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 全市场扫描 v7 {now:%Y-%m-%d}")
+    print(f"[START] 全市场扫描 v7.1 {now:%Y-%m-%d}")
 
-    # ── 0. 最近交易日 ──
     latest_td = get_latest_trade_date(now)
     print(f"  [0] 最近交易日: {latest_td}")
     if not latest_td:
         push(f"🔍 框架扫描 {now:%m.%d}", "## 🔍 框架扫描失败\n\ntrade_cal 无法获取交易日。")
         return
 
-    # ── 1. 成分股 ──
     constituents = set()
     for idx in ["000300.SH", "000905.SH"]:
         fields, items = ts_df("index_weight", "index_code,con_code,trade_date",
@@ -143,7 +147,6 @@ def main():
 
     print(f"  [1] 成分股总计: {len(constituents)} 只")
 
-    # ── 2. 基础信息 ──
     fields, items = ts_df("stock_basic",
                           "ts_code,name,industry,list_date",
                           list_status="L")
@@ -163,7 +166,6 @@ def main():
         push(f"🔍 框架扫描 {now:%m.%d}", "## 🔍 框架扫描失败\n\n基础信息无数据。")
         return
 
-    # ── 3. daily_basic：全市场单日查询，分页 ──
     print(f"  拉取 daily_basic 全市场 @ {latest_td} ...")
     all_items = []
     offset = 0
@@ -187,7 +189,6 @@ def main():
             stocks[code]["dv"] = row[fc["dv_ratio"]] if row[fc["dv_ratio"]] else None
     print(f"  [3] 估值数据(全市场): {len(all_items)} 条")
 
-    # ── 4. fina_indicator：批量查最近年报 ROE ──
     td_year = int(latest_td[:4])
     start_r = f"{td_year-3}0101"
     end_r = f"{td_year}1231"
@@ -219,11 +220,14 @@ def main():
         if name in EXISTING:
             continue
 
+        ind = s.get("industry", "")
+        if ind == "保险":
+            continue   # 保险股PE假便宜，需PEV估值，本扫描器不处理
+
         pe = s.get("pe")
         pb = s.get("pb")
         roe = s.get("roe")
         dv = s.get("dv")
-        ind = s.get("industry", "")
 
         if pe is None or pe <= 0 or pe > 50:
             continue
@@ -257,7 +261,6 @@ def main():
         if pb < 1.5 and roe > 0 and not matched:
             results[3].append((name, code, pe, pb, roe, dv, ind))
 
-    # ── 6. 推送 ──
     total = sum(len(v) for v in results.values())
     cat_names = {1: "①永续债", 2: "②高息成长", 3: "③周期拐点",
                  4: "④全球寡头", 5: "⑤品牌心智", 6: "⑥小众冠军"}
