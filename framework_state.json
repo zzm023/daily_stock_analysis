@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-08-13T09:04:55",
+    "updated": "2026-08-13T15:38:51",
     "total_capital": 400000
   },
   "trigger": {
@@ -85,7 +85,7 @@
     },
     "600406": {
       "name": "国电南瑞",
-      "trigger_price": 20.80,
+      "trigger_price": 20.8,
       "anchor_pct": 3.0,
       "dps": 0.475,
       "current_price": 24.06,
@@ -269,7 +269,7 @@
     },
     "600066": {
       "name": "宇通客车",
-      "trigger_price": 27.00,
+      "trigger_price": 27.0,
       "anchor_pct": 0,
       "dps": 2.0,
       "current_price": 29.82,
