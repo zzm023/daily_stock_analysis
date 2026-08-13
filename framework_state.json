@@ -85,7 +85,7 @@
     },
     "600406": {
       "name": "国电南瑞",
-      "trigger_price": 20.8,
+      "trigger_price": 20,
       "anchor_pct": 3.0,
       "dps": 0.475,
       "current_price": 24.06,
@@ -135,7 +135,7 @@
     },
     "600007": {
       "name": "中国国贸",
-      "trigger_price": 16.46,
+      "trigger_price": 17.5,
       "anchor_pct": 6.5,
       "dps": 1.07,
       "current_price": 18.58,
