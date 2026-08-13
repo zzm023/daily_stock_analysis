@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-大宗商品价格监控 v1.1
+大宗商品价格监控 v1.2
 监控9个商品 → 8只框架股票
 周期：碳酸锂+MDI每天；其余每周一
 
@@ -125,24 +125,28 @@ def get_100ppi_price(ppid, name):
     try:
         url = f"https://www.100ppi.com/price/detail-{ppid}.html"
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         resp = requests.get(url, headers=headers, timeout=15)
         resp.encoding = "utf-8"
         text = resp.text
 
         patterns = [
-            r'<span class="price"[^>]*>(\d+[\.\d]*)</span>',
-            r'最新价格[：:]\s*(\d+[\.\d]*)',
-            r'参考价[：:]\s*(\d+[\.\d]*)',
-            r'<td[^>]*class="[^"]*price[^"]*"[^>]*>(\d+[\.\d]*)</td>',
+            r'<span[^>]*class="[^"]*price[^"]*"[^>]*>(\d+\.?\d*)</span>',
+            r'最新价格[：:]\s*(\d+\.?\d*)',
+            r'最新价[：:]\s*(\d+\.?\d*)',
+            r'参考价[：:]\s*(\d+\.?\d*)',
+            r'基准价[：:]\s*(\d+\.?\d*)',
+            r'"price"\s*:\s*"?(\d+\.?\d*)"?',
+            r'"latestPrice"\s*:\s*"?(\d+\.?\d*)"?',
+            r'<td[^>]*class="[^"]*price[^"]*"[^>]*>(\d+\.?\d*)</td>',
         ]
         for pat in patterns:
             m = re.search(pat, text)
             if m:
                 price = float(m.group(1))
                 return {"price": price, "date": str(date.today()), "change_pct": None}
-        print(f"  [100ppi] {name}({ppid}) 未匹配到价格")
+        print(f"  [100ppi] {name}({ppid}) 未匹配到价格（页面已抓取 {len(text)} 字符）")
     except Exception as e:
         print(f"  [100ppi] {name}({ppid}) 请求失败: {e}")
     return None
@@ -217,6 +221,8 @@ def main():
     alerts = []
     weekly_items = []
     all_data = {}
+    ok_count = 0
+    fail_count = 0
 
     for name, cfg in COMMODITIES.items():
         if not should_check_today(cfg):
@@ -229,6 +235,7 @@ def main():
         if result is None:
             print(f"  获取失败，跳过")
             all_data[name] = history.get(name, {})
+            fail_count += 1
             continue
 
         new_price = result["price"]
@@ -236,13 +243,14 @@ def main():
         old_price = old_data.get("price")
 
         record = {
-            "name": name,                       # 修复：记录商品名
+            "name": name,
             "price": new_price,
             "date": result["date"],
             "unit": cfg["unit"],
             "stocks": ", ".join(cfg["stocks"]),
         }
         all_data[name] = record
+        ok_count += 1
 
         print(f"  {new_price:,.0f} {cfg['unit']}")
 
@@ -268,10 +276,10 @@ def main():
     save_history(all_data)
 
     if not alerts and not weekly_items:
-        print("无告警，无周报，不推送。")
+        print(f"无告警无周报。成功{ok_count} 失败{fail_count}。")
         return
 
-    lines = [f"## 📊 大宗商品 {now:%m-%d %H:%M}", ""]
+    lines = [f"## 📊 大宗商品 {now:%m-%d %H:%M}", f"成功{ok_count}项 · 失败{fail_count}项", ""]
 
     if alerts:
         lines.append(f"**🔴 商品价格告警（{len(alerts)}项）**")
@@ -286,17 +294,6 @@ def main():
         lines.append("")
         for item in weekly_items:
             lines.append(f"· {item['name']} 现{item['price']:,.0f}{item['unit']} 影响{item['stocks']}")
-            lines.append("")
-
-        daily_in_weekly = []
-        for name, data in all_data.items():
-            cfg = COMMODITIES.get(name, {})
-            if cfg.get("level") == "daily" and data:
-                daily_in_weekly.append(f"· {name} 现{data['price']:,.0f}{cfg['unit']} 影响{data['stocks']}")
-        if daily_in_weekly:
-            lines.append("**每日监控商品（周一快照）**")
-            lines.append("")
-            lines.extend(daily_in_weekly)
             lines.append("")
 
     lines.append("---")
