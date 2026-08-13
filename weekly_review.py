@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-每周复盘 v3：PE / PB / 距触发价汇总
+每周复盘 v3.1：PE / PB / 距触发价汇总
 联动 framework_state.json：读触发价 + 动态股票清单
 数据源：Tushare daily_basic（PE/PB/收盘价）— 每周六 18:00
 """
@@ -8,14 +8,13 @@ import os
 import json
 import requests
 from datetime import datetime, timedelta, timezone
-import tushare as ts
+import tushare
 
 STATE_FILE = "framework_state.json"
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-# 分类映射（code → attr），六类框架 + 科技
 ATTR_MAP = {
     "600036": "①永续债", "601601": "①永续债", "600018": "①永续债",
     "601816": "①永续债", "600900": "①永续债", "600941": "①永续债",
@@ -82,7 +81,6 @@ def get_latest_trade_date(pro, now):
 
 
 def fetch_quotes(pro, codes, latest_td):
-    """Tushare daily_basic 批量拿 pe/pb/收盘价"""
     lookup = {}
     ts_codes = ",".join(to_ts_code(c) for c in codes)
     try:
@@ -126,17 +124,16 @@ def push(title, content):
 
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 每周复盘 v3 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 每周复盘 v3.1 {now:%Y-%m-%d %H:%M}")
 
     if not TUSHARE_TOKEN:
         print("[SKIP] 未配置 TUSHARE_TOKEN")
         return
 
-    pro = ts.pro_api(TUSHARE_TOKEN)
+    pro = tushare.pro_api(TUSHARE_TOKEN)
     state = load_state()
     trigger = state.get("trigger", {})
 
-    # 股票清单从 trigger 动态读，匹配分类
     stocks = []
     for code, info in trigger.items():
         stocks.append({
