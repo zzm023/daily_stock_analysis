@@ -1,9 +1,11 @@
 """
-卖出决策 v1.0（任务②）
-功能：持仓盈亏总览 + 跌破触发价卖出信号
-数据源：framework_state.json（持仓/触发价） + 东财实时价（分批拉取）
+卖出决策 v1.1（任务②）
+规则（左侧交易+长线持股）：
+1. 翻倍止盈：盈亏≥+100% → 卖出
+2. 宝信软件特殊：回本（盈亏≥+0.2%覆盖手续费税）→ 卖出
+3. 基本面恶化：读earnings_events（季报追踪填充）→ 卖出警示
+4. 跌破触发价 = 加仓机会（非卖出），见触发价总监控
 运行：收盘后 16:30
-注意：东财f2返回"分"需÷100；跌破触发价=卖出警示（非自动卖出）
 """
 
 import os, json, time, requests
@@ -14,7 +16,10 @@ PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 FRAMEWORK_FILE = "framework_state.json"
 
 BATCH_SIZE = 20
-EXCLUDE = {"002747"}   # 埃斯顿（负成本，已了结，不监控）
+DOUBLE_PNL = 100.0     # 翻倍止盈线（%）
+RECOVER_PNL = 0.2      # 宝信软件回本线（%，覆盖手续费+税）
+EXCLUDE = {"002747"}   # 埃斯顿（负成本，已了结）
+BAOXIN = "600845"      # 宝信软件（框架外，回本即卖）
 
 
 def to_secid(code):
@@ -28,10 +33,11 @@ def load_framework():
         with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except:
-        return {}, {}
+        return {}, {}, []
     trigger = data.get("trigger", {})
     holdings = {k: v for k, v in data.get("holdings", {}).items() if k != "cash"}
-    return trigger, holdings
+    earnings = data.get("earnings_events", [])
+    return trigger, holdings, earnings
 
 
 def fetch_prices(secids, retries=3):
@@ -84,7 +90,7 @@ def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
     print(f"[START] 卖出决策 {now:%m-%d %H:%M}")
 
-    trigger, holdings = load_framework()
+    trigger, holdings, earnings = load_framework()
 
     # 持仓（排除埃斯顿）
     positions = []
@@ -96,7 +102,6 @@ def main():
             "name": info.get("name", code),
             "cost": info.get("cost", 0) or 0,
             "shares": info.get("shares", 0) or 0,
-            "trigger": trigger.get(code, {}).get("trigger_price", 0) or 0,
         })
 
     if not positions:
@@ -113,14 +118,24 @@ def main():
     for q in quotes:
         code = q.get("f12", "")
         try:
-            price = float(q.get("f2", 0)) / 100   # 分 → 元
+            price = float(q.get("f2", 0)) / 100
         except:
             price = 0
         if code:
             quote_map[code] = price
 
-    sell_signals = []  # 跌破触发价
-    profit_rows = []   # 盈亏总览
+    # 基本面恶化清单（季报追踪任务填充 earnings_events）
+    worsen_codes = set()
+    for e in earnings:
+        c = e.get("code", "")
+        status = str(e.get("status", "")) + str(e.get("detail", ""))
+        if "恶化" in status or "下滑" in status or "亏损" in status:
+            worsen_codes.add(c)
+
+    double_signals = []   # 翻倍止盈
+    recover_signals = []  # 宝信回本
+    worsen_signals = []   # 基本面恶化
+    profit_rows = []      # 盈亏总览
 
     for p in positions:
         price = quote_map.get(p["code"])
@@ -132,39 +147,56 @@ def main():
         row = {**p, "price": price, "pnl_pct": pnl_pct, "pnl_amt": pnl_amt}
         profit_rows.append(row)
 
-        # 跌破触发价 = 卖出警示
-        if p["trigger"] > 0 and price < p["trigger"]:
-            row["gap"] = (price - p["trigger"]) / p["trigger"] * 100
-            sell_signals.append(row)
+        # 翻倍止盈
+        if pnl_pct >= DOUBLE_PNL:
+            double_signals.append(row)
+        # 宝信软件：回本即卖
+        elif p["code"] == BAOXIN and pnl_pct >= RECOVER_PNL:
+            recover_signals.append(row)
+        # 基本面恶化
+        if p["code"] in worsen_codes:
+            worsen_signals.append(row)
 
-    print(f"  卖出信号 {len(sell_signals)} | 持仓 {len(profit_rows)}")
+    print(f"  翻倍 {len(double_signals)} | 宝信回本 {len(recover_signals)} | 恶化 {len(worsen_signals)}")
 
     lines = [
         f"## 📊 卖出决策 {now:%m-%d %H:%M}",
-        f"持仓{len(profit_rows)}只 · 跌破触发价{len(sell_signals)}只",
+        f"持仓{len(profit_rows)}只 · 翻倍{len(double_signals)} · 回本{len(recover_signals)} · 恶化{len(worsen_signals)}",
         "",
     ]
 
-    if sell_signals:
-        lines.append("**🔴 卖出警示（现价跌破触发价）**")
+    if double_signals:
+        lines.append("**🟢 翻倍止盈（盈亏≥100%）**")
         lines.append("")
-        for r in sell_signals:
-            lines.append(f"· {r['name']}({r['code']}) 现{r['price']:.2f} 触发{r['trigger']:.2f} 距{r['gap']:+.1f}% 成本{r['cost']:.2f}")
+        for r in double_signals:
+            lines.append(f"· {r['name']}({r['code']}) 现{r['price']:.2f} 成本{r['cost']:.2f} 盈亏{r['pnl_pct']:+.1f}%（{r['pnl_amt']:+.0f}元）")
             lines.append("")
-        lines.append("> 跌破触发价≠立即卖，需结合季报恶化、逻辑破坏综合判断。")
+
+    if recover_signals:
+        lines.append("**🟢 宝信软件回本（≥成本，含手续费税）**")
         lines.append("")
+        for r in recover_signals:
+            lines.append(f"· {r['name']}({r['code']}) 现{r['price']:.2f} 成本{r['cost']:.2f} 盈亏{r['pnl_pct']:+.1f}%")
+            lines.append("")
+
+    if worsen_signals:
+        lines.append("**🔴 基本面恶化警示（季报追踪）**")
+        lines.append("")
+        for r in worsen_signals:
+            lines.append(f"· {r['name']}({r['code']}) 季报恶化，审视买入逻辑")
+            lines.append("")
 
     lines.append("**📋 持仓盈亏总览**")
     lines.append("")
     for r in profit_rows:
-        pnl_mark = "🔴" if r["pnl_pct"] < 0 else "🟢"
-        trig_str = f" 触发{r['trigger']:.2f}" if r["trigger"] > 0 else ""
-        lines.append(f"{pnl_mark} {r['name']}({r['code']}) 现{r['price']:.2f} 成本{r['cost']:.2f} 盈亏{r['pnl_pct']:+.1f}%（{r['pnl_amt']:+.0f}元）{trig_str}")
+        mark = "🔴" if r["pnl_pct"] < 0 else "🟢"
+        near_double = " ｜接近翻倍" if 80 <= r["pnl_pct"] < 100 else ""
+        lines.append(f"{mark} {r['name']}({r['code']}) 现{r['price']:.2f} 成本{r['cost']:.2f} 盈亏{r['pnl_pct']:+.1f}%（{r['pnl_amt']:+.0f}元）{near_double}")
         lines.append("")
 
-    lines.append("⚠️ 卖出纪律：逻辑破坏→卖；季报恶化→卖；跌破触发价→审视是否补错仓。其余持有收租。")
+    lines.append("⚠️ 卖出三原则：翻倍→卖；基本面恶化→卖；宝信回本→卖。跌破触发价=加仓机会（左侧，非卖出）。")
 
-    push(f"📊 卖出决策（{len(sell_signals)}警示）", "\n".join(lines))
+    push(f"📊 卖出决策（翻倍{len(double_signals)}/回本{len(recover_signals)}/恶化{len(worsen_signals)}）", "\n".join(lines))
     print("[DONE] 推送完成")
 
 
