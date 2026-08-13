@@ -48,13 +48,21 @@ def push(title, content):
 
 
 def fetch_quotes(secids):
-    url = "http://push2.eastmoney.com/api/qt/ulist.np/get"
+    url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
     params = {"secids": ",".join(secids), "fields": "f2,f3,f12,f14"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://quote.eastmoney.com/",
+    }
+    r = None
     try:
-        r = requests.get(url, params=params, timeout=10)
-        return r.json().get("data", {}).get("diff", [])
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("data", {}).get("diff", [])
     except Exception as e:
-        print(f"  [东财] {e}")
+        snippet = repr(r.text[:200]) if r is not None else ""
+        print(f"  [东财] {e} | 响应: {snippet}")
         return []
 
 
