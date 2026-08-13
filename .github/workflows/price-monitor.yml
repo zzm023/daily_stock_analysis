@@ -2,7 +2,7 @@ name: 触发价监控
 
 on:
   schedule:
-    - cron: '30 10 * * 1-5'
+    - cron: '45 7 * * 1-5'
   workflow_dispatch:
 
 jobs:
