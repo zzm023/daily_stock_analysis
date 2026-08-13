@@ -6,7 +6,7 @@
 运行：收盘后 15:45
 """
 
-import os, json, requests
+import os, json, time, requests
 from datetime import datetime, timedelta, timezone
 
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
@@ -35,23 +35,26 @@ def load_framework():
     return trigger, holdings
 
 
-def fetch_quotes(secids):
-    """东财批量：f2现价 f9市盈率 f23市净率"""
+def fetch_prices(secids, retries=3):
+    """东财批量：f2现价 f9市盈率 f23市净率，带重试"""
     url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
     params = {"secids": ",".join(secids), "fields": "f2,f9,f12,f14,f23"}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://quote.eastmoney.com/",
     }
-    r = None
-    try:
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        r.raise_for_status()
-        return r.json().get("data", {}).get("diff", [])
-    except Exception as e:
-        snippet = repr(r.text[:200]) if r is not None else ""
-        print(f"  [东财] {e} | 响应: {snippet}")
-        return []
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            diff = data.get("data", {}).get("diff", [])
+            if diff:
+                return diff
+        except Exception as e:
+            print(f"  [东财] 第{attempt+1}次失败: {e}")
+        time.sleep(3)
+    return []
 
 
 def push(title, content):
@@ -75,7 +78,6 @@ def main():
     trigger, holdings = load_framework()
     hold_codes = set(holdings.keys())
 
-    # 候选：trigger_price > 0 的股票
     candidates = []
     for code, info in trigger.items():
         tp = info.get("trigger_price", 0) or 0
@@ -95,12 +97,11 @@ def main():
         return
 
     secids = [to_secid(c["code"]) for c in candidates]
-    quotes = fetch_quotes(secids)
+    quotes = fetch_prices(secids)
     if not quotes:
-        print("[SKIP] 行情为空")
+        print("[SKIP] 行情为空（重试3次仍失败）")
         return
 
-    # 解析行情
     quote_map = {}
     for q in quotes:
         code = q.get("f12", "")
@@ -113,10 +114,10 @@ def main():
         if code:
             quote_map[code] = {"price": price, "pe": pe, "pb": pb}
 
-    hit = []     # 已触发：现价 ≤ 触发价
-    close = []   # 即将：gap ≤ 10%
-    buy = []     # 买入清单：gap≤10% + PE/PB达标
-    ranking = [] # 距触发价排行
+    hit = []
+    close = []
+    buy = []
+    ranking = []
 
     for c in candidates:
         code = c["code"]
@@ -135,17 +136,14 @@ def main():
             hit.append(row)
         elif gap <= GAP_CLOSE:
             close.append(row)
-            # 买入清单判断：PE/PB 锚点都存在且达标
             if c["pe_upper"] > 0 and c["pb_lower"] > 0 and q["pe"] > 0 and q["pb"] > 0:
                 if q["pe"] <= c["pe_upper"] and q["pb"] <= c["pb_lower"]:
                     buy.append(row)
 
-    # 距触发价排行（升序）
     ranking.sort(key=lambda x: x["gap"])
 
     print(f"  已触发 {len(hit)} | 临近 {len(close)} | 买入清单 {len(buy)}")
 
-    # 推送
     lines = [
         f"## 📊 触发价总监控 {now:%m-%d %H:%M}",
         f"监控 {len(candidates)} 只 · 已触发 {len(hit)} · 临近 {len(close)} · 可买 {len(buy)}",
@@ -176,9 +174,10 @@ def main():
         lines.append("")
         lines.append("| 股票 | 现价 | 触发价 | 差距 | PE | PB |")
         lines.append("|:--|--:|--:|--:|--:|--:|")
+        buy_codes = {b["code"] for b in buy}
         for r in close:
-            if any(b["code"] == r["code"] for b in buy):
-                continue  # 已在买入清单，跳过
+            if r["code"] in buy_codes:
+                continue
             lines.append(f"| {r['name']}({r['code']}) | {r['price']:.2f} | {r['trigger']:.2f} | {r['gap']:+.1f}% | {r['pe']:.1f} | {r['pb']:.2f} |")
         lines.append("")
 
