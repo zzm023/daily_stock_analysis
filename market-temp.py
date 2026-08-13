@@ -1,140 +1,124 @@
+#!/usr/bin/env python3
 """
-全市场估值温度 v6
-数据源：新浪指数价格 + 自累积分位数
-每日 17:00 CST
-无外部 PE/PB 依赖，适合海外 IP
+全市场估值温度 v1.0（任务⑩）
+功能：沪深300 PE(TTM) 历史分位 → 大盘温度计
+数据源：akshare stock_a_pe（乐咕乐股，沪深300历史PE）
+运行：收盘后 17:00
 """
-import os
-import json
-import requests
-from datetime import datetime, date
-from pathlib import Path
 
-DATA_FILE = Path(__file__).parent / "market_temperature.json"
+import os
+import requests
+from datetime import datetime, timezone, timedelta
+
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
-
-INDICES = {
-    "沪深300": "s_sh000300",
-    "上证50":  "s_sh000016",
-    "中证500": "s_sh000905",
-    "创业板指": "s_sz399006",
-}
-
-
-def get_sina_index(sina_code):
-    try:
-        r = requests.get(f"https://hq.sinajs.cn/list={sina_code}",
-                         headers={"Referer": "https://finance.sina.com.cn"}, timeout=10)
-        r.encoding = "gbk"
-        text = r.text
-        if "=" not in text or '""' in text:
-            return None
-        data = text.split('"')[1].split(",")
-        if len(data) < 4:
-            return None
-        return {
-            "price": float(data[1]) if data[1] else 0,
-            "chg_pct": float(data[3]) if data[3] else 0,
-        }
-    except Exception as e:
-        print(f"  [新浪] {sina_code}: {e}")
-    return None
-
-
-def load_history():
-    if DATA_FILE.exists():
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def save_history(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def calc_percentile(values, current):
-    if len(values) < 20 or not current:
-        return None
-    below = sum(1 for v in values if v < current)
-    return round(below / len(values) * 100, 1)
-
-
-def label(pct):
-    if pct is None:
-        return "❓ 累积中（需20天+）", ""
-    if pct <= 25:
-        return "🧊 低估", f"价格分位{pct:.0f}% → 可适当出手"
-    elif pct <= 70:
-        return "🌤 正常", f"价格分位{pct:.0f}% → 耐心等待"
-    else:
-        return "🔥 高估", f"价格分位{pct:.0f}% → 出手收紧"
 
 
 def push(title, content):
     if not PUSHPLUS_TOKEN:
+        print("  [PushPlus] 未配置TOKEN，跳过推送")
         return
     try:
-        payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
+        payload = {
+            "token": PUSHPLUS_TOKEN,
+            "title": title,
+            "content": content,
+            "template": "markdown",
+        }
         if PUSHPLUS_TOPIC:
             payload["topic"] = PUSHPLUS_TOPIC
         r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=10)
-        print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
+        result = r.json()
+        if result.get("code") == 200:
+            print(f"  [PushPlus] 推送成功")
+        else:
+            print(f"  [PushPlus] 推送失败: {result}")
     except Exception as e:
-        print(f"[PushPlus] {e}")
+        print(f"  [PushPlus] 推送异常: {e}")
+
+
+def percentile_rank(series, value):
+    """计算 value 在 series 中的历史分位（0-100）"""
+    if len(series) == 0:
+        return None
+    below = (series <= value).sum()
+    return round(below / len(series) * 100, 1)
 
 
 def main():
-    now = datetime.now()
-    today_str = str(date.today())
-    print(f"[START] 全市场估值温度 v6 {now:%Y-%m-%d %H:%M}")
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    print(f"[START] 全市场温度 {now:%m-%d %H:%M}")
 
-    history = load_history()
-    lines = [f"## 🌡 全市场估值温度 — {now:%Y.%m.%d}", "",
-             f"{now:%H:%M}", ""]
+    try:
+        import akshare as ak
+        df = ak.stock_a_pe(market="000300.XSHG")
+        if df is None or df.empty:
+            print("  沪深300 PE 数据为空")
+            push("🌡️ 全市场温度", "## 🌡️ 全市场温度\n\n数据为空，请检查数据源。")
+            return
 
-    for name, sina_code in INDICES.items():
-        idx = get_sina_index(sina_code)
-        if idx is None:
-            continue
+        # 取加权PE(TTM)序列
+        pe = df["averagePETTM"].dropna()
+        if len(pe) == 0:
+            print("  averagePETTM 列缺失")
+            push("🌡️ 全市场温度", "## 🌡️ 全市场温度\n\nPE数据列缺失。")
+            return
 
-        price = idx["price"]
-        chg = idx["chg_pct"]
+        cur_pe = float(pe.iloc[-1])
+        last_date = str(df["date"].iloc[-1])[:10]
 
-        # 累积历史
-        h = history.setdefault(name, [])
-        if not h or not h[-1].startswith(today_str):
-            h.append(f"{today_str}:{price:.0f}")
-            if len(h) > 500:
-                h = h[-500:]
-                history[name] = h
+        # 历史分位（用近10年 + 全历史）
+        pct_all = percentile_rank(pe, cur_pe)
+        recent = pe.tail(2500)   # 约10年交易日
+        pct_10y = percentile_rank(recent, cur_pe)
 
-        prices = [float(v.split(":")[1]) for v in h]
-        pct = calc_percentile(prices, price)
-        lbl, adv = label(pct)
+        # 温度分档
+        if pct_10y is not None:
+            if pct_10y < 20:
+                level = "❄️ 冰点（极度低估）"
+                hint = "历史性击球区，可以贪婪。"
+            elif pct_10y < 40:
+                level = "🧊 偏冷（低估）"
+                hint = "便宜区间，适合左侧分批。"
+            elif pct_10y < 60:
+                level = "🌤 合理"
+                hint = "不贵不便宜，耐心等击球点。"
+            elif pct_10y < 80:
+                level = "🔥 偏热（高估）"
+                hint = "偏贵，谨慎加仓。"
+            else:
+                level = "☀️ 过热（极度高估）"
+                hint = "历史高位，防守为主。"
+        else:
+            level = "未知"
+            hint = ""
 
-        lines.append(f"### {name}")
-        lines.append(f"指数 {price:,.0f} | 涨跌{chg:+.2f}%")
-        lines.append(f"> {lbl}  {adv}")
-        lines.append("")
+        print(f"  沪深300 PE(TTM)={cur_pe:.2f} 分位={pct_10y}%")
 
-        print(f"  {name}: {price:,.0f} 分位{pct}% → {lbl}")
+        lines = [
+            f"## 🌡️ 全市场温度 {now:%m-%d %H:%M}",
+            "",
+            f"**沪深300 PE(TTM)：{cur_pe:.2f}**",
+            "",
+            f"· 近10年分位：**{pct_10y}%**",
+            f"· 全历史分位：{pct_all}%",
+            "",
+            f"**温度：{level}**",
+            f"{hint}",
+            "",
+            "---",
+            f"⏰ {now:%Y-%m-%d %H:%M} | 数据日 {last_date} | 乐咕乐股",
+        ]
 
-    save_history(history)
+        push(f"🌡️ 温度 {pct_10y}% {level.split(' ')[1]}", "\n".join(lines))
+        print("[DONE] 推送完成")
 
-    max_d = max((len(history[n]) for n in history if isinstance(history.get(n), list)), default=0)
-    need_more = max(0, 20 - max_d)
-
-    lines.append("---")
-    lines.append("📌 基于价格分位（非 PE/PB 估值分位）：历史价格低位=有安全边际。")
-    lines.append(f"📊 累积{max_d}天" + (f" | 还需{need_more}天达有效分位" if need_more else " | 分位数有效✅"))
-    lines.append("")
-    lines.append("**框架联动：** 多指数低估时触发价放宽5-10%；全面高估时收紧。")
-    lines.append("> 数据源：新浪指数行情 | 自累积分位 | 不受国内 IP 限制")
-
-    push(f"🌡 估值温度 {now:%Y.%m.%d}", "\n".join(lines))
-    print("[DONE]")
+    except ImportError:
+        print("  [错误] 未安装 akshare")
+        push("🌡️ 全市场温度", "## 🌡️ 全市场温度\n\n未安装 akshare，请在 yml 加依赖。")
+    except Exception as e:
+        print(f"  [错误] {e}")
+        push("🌡️ 全市场温度", f"## 🌡️ 全市场温度\n\n运行出错：{e}")
 
 
 if __name__ == "__main__":
