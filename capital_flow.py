@@ -15,6 +15,7 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 FRAMEWORK_FILE = "framework_state.json"
 BATCH_SIZE = 20
+EXCLUDE = {"002747"}   # 埃斯顿（负成本，已了结）
 GAP_LIMIT = 10.0
 DAYS = 5            # 观察最近5个交易日
 INFLOW_TH = 3000    # 主力累计净流入阈值（万元）→ 关注
@@ -100,6 +101,8 @@ def main():
     # 监控范围：持仓股 + gap≤10%的候选
     targets = {}
     for code, info in holdings.items():
+       if code in EXCLUDE:
+           continue
         targets[code] = {"name": info.get("name", code), "is_hold": True, "trigger": trigger.get(code, {}).get("trigger_price", 0) or 0}
 
     secids = [to_secid(c) for c in targets.keys()]
