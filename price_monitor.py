@@ -1,10 +1,10 @@
 """
-触发价总监控 v1.1（任务①）
+触发价总监控 v1.2（任务①）
 功能：已触发 + 即将触发 + 买入清单 + 距触发价排行
 数据源：framework_state.json（触发价/PE/PB锚点/持仓） + 东财实时价(收盘价)
 联动：买入清单 = gap≤10% + PE≤pe_upper + PB≤pb_lower（锚点严格取框架，不猜测）
 运行：收盘后 15:45
-注意：东财f2/f18返回"分"，需÷100转元
+注意：东财f2返回"分"，需÷100转元；推送用列表格式一行一只
 """
 
 import os, json, time, requests
@@ -144,53 +144,42 @@ def main():
 
     print(f"  已触发 {len(hit)} | 临近 {len(close)} | 买入清单 {len(buy)}")
 
+    # 推送（列表格式，一行一只）
     lines = [
         f"## 📊 触发价总监控 {now:%m-%d %H:%M}",
-        f"监控 {len(candidates)} 只 · 已触发 {len(hit)} · 临近 {len(close)} · 可买 {len(buy)}",
+        f"监控{len(candidates)}只 · 触发{len(hit)} · 临近{len(close)} · 可买{len(buy)}",
         "",
     ]
 
     if hit:
-        lines.append("### 🔥 已触发（现价≤触发价）")
-        lines.append("")
-        lines.append("| 股票 | 现价 | 触发价 | 差距 | 备注 |")
-        lines.append("|:--|--:|--:|--:|:--|")
+        lines.append("**🔥 已触发（现价≤触发价）**")
         for r in hit:
-            tag = "持仓·补仓" if r["is_hold"] else "待买"
-            lines.append(f"| {r['name']}({r['code']}) | {r['price']:.2f} | {r['trigger']:.2f} | {r['gap']:+.1f}% | {tag} |")
+            tag = "｜补仓" if r["is_hold"] else "｜待买"
+            lines.append(f"· {r['name']}({r['code']}) {r['price']:.2f}→{r['trigger']:.2f} 距{r['gap']:+.1f}%{tag}")
         lines.append("")
 
     if buy:
-        lines.append("### 🎯 买入清单（gap≤10% + PE/PB达标）")
-        lines.append("")
-        lines.append("| 股票 | 现价 | 触发价 | 差距 | PE | PB |")
-        lines.append("|:--|--:|--:|--:|--:|--:|")
+        lines.append("**🎯 买入清单（gap≤10%+PE/PB达标）**")
         for r in buy:
-            lines.append(f"| {r['name']}({r['code']}) | {r['price']:.2f} | {r['trigger']:.2f} | {r['gap']:+.1f}% | {r['pe']:.1f} | {r['pb']:.2f} |")
+            lines.append(f"· {r['name']}({r['code']}) {r['price']:.2f}→{r['trigger']:.2f} PE{r['pe']:.1f} PB{r['pb']:.2f}")
         lines.append("")
 
     if close:
-        lines.append("### ⏳ 即将触发（距触发≤10%，未达估值）")
-        lines.append("")
-        lines.append("| 股票 | 现价 | 触发价 | 差距 | PE | PB |")
-        lines.append("|:--|--:|--:|--:|--:|--:|")
+        lines.append("**⏳ 即将触发（未达估值）**")
         buy_codes = {b["code"] for b in buy}
         for r in close:
             if r["code"] in buy_codes:
                 continue
-            lines.append(f"| {r['name']}({r['code']}) | {r['price']:.2f} | {r['trigger']:.2f} | {r['gap']:+.1f}% | {r['pe']:.1f} | {r['pb']:.2f} |")
+            lines.append(f"· {r['name']}({r['code']}) {r['price']:.2f}→{r['trigger']:.2f} PE{r['pe']:.1f} PB{r['pb']:.2f}")
         lines.append("")
 
     if ranking:
-        lines.append(f"### 📉 距触发价排行（前{RANK_TOP}）")
-        lines.append("")
-        lines.append("| 股票 | 现价 | 触发价 | 差距 |")
-        lines.append("|:--|--:|--:|--:|")
-        for r in ranking[:RANK_TOP]:
-            lines.append(f"| {r['name']}({r['code']}) | {r['price']:.2f} | {r['trigger']:.2f} | {r['gap']:+.1f}% |")
+        lines.append(f"**📉 距触发价排行（前{RANK_TOP}）**")
+        for i, r in enumerate(ranking[:RANK_TOP], 1):
+            lines.append(f"{i}. {r['name']} {r['price']:.2f}→{r['trigger']:.2f}（{r['gap']:+.1f}%）")
         lines.append("")
 
-    lines.append("> ⚠️ 触发≠立即买。左侧分层：目标价打9折、仓位减半、观察1周。")
+    lines.append("⚠️ 触发≠立即买。左侧分层：目标价打9折、仓位减半、观察1周。")
 
     push(f"📊 触发价总监控（{len(hit)}触发/{len(buy)}可买）", "\n".join(lines))
     print("[DONE] 推送完成")
