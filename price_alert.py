@@ -1,7 +1,8 @@
 """
-价格异动监控（盘中实时）v3
+价格异动监控（盘中实时）v3.1
 和触发价联动：持仓(±3%) + gap≤10%观察股(±5%)
 数据源：framework_state.json（触发价+持仓） + 东财实时价
+涨跌幅 = (最新价f2 - 昨收f18) / 昨收f18，自算不依赖f3
 """
 
 import os, json, requests
@@ -49,7 +50,7 @@ def push(title, content):
 
 def fetch_quotes(secids):
     url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
-    params = {"secids": ",".join(secids), "fields": "f2,f3,f12,f14"}
+    params = {"secids": ",".join(secids), "fields": "f2,f12,f14,f18"}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://quote.eastmoney.com/",
@@ -132,13 +133,14 @@ def main():
         code = q.get("f12", "")
         try:
             price = float(q.get("f2", 0))
+            prev_close = float(q.get("f18", 0))
         except:
             price = 0
-        if code in candidates:
-            price_map[code] = {
-                "price": price,
-                "change": float(str(q.get("f3", "0")).replace("%", "")),
-            }
+            prev_close = 0
+        if code not in candidates:
+            continue
+        change = (price - prev_close) / prev_close * 100 if prev_close > 0 else 0
+        price_map[code] = {"price": price, "change": change}
 
     state = load_state()
     today = now.strftime("%Y%m%d")
