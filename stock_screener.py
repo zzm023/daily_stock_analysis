@@ -1,11 +1,11 @@
 """
-全市场扫描器 v7.2
+全市场扫描器 v7.3
 每周一从 CSI 300 + CSI 500 中按六类框架筛选候选 → PushPlus
 - daily_basic 用全市场单日查询（不支持 ts_code 批量）
 - fina_indicator 用 ts_code 批量（每批100个）
 - 用 trade_cal 动态探测最近交易日
-- 排除已在框架中的 52 只 + 保险股
-- v7.2：修复时间边界（早于17:00跑回退到上一个交易日，避免当天数据未生成导致0命中）
+- 排除框架股：从 framework_state.json 动态读取 trigger+holdings + 硬编码补充
+- v7.3：框架股名单改为动态读取，不再漏掉新加入的股票
 
 运行状态：✅ 已跑通
 """
@@ -16,22 +16,17 @@ from datetime import datetime, timedelta, timezone
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
+FRAMEWORK_FILE = "framework_state.json"
 
+# 硬编码补充：已清除/观察中的股票（不在 framework_state.json 里，但不应再扫出来）
 EXISTING = {
-    "长江电力", "中国神华", "中国海油", "中国移动", "中国石油",
-    "招商银行", "建设银行", "工商银行", "农业银行", "交通银行", "中国银行",
-    "格力电器", "美的集团", "海尔智家",
-    "伊利股份", "双汇发展", "海天味业", "贵州茅台", "五粮液", "泸州老窖",
-    "云南白药", "片仔癀", "同仁堂", "珀莱雅",
-    "分众传媒", "苏泊尔",
-    "万华化学", "宝钢股份", "中信特钢", "龙佰集团",
-    "温氏股份", "牧原股份", "北大荒",
-    "中联重科", "安徽合力",
-    "中国太保", "中国平安", "新华保险", "中国人寿", "中国人保",
-    "京沪高铁", "上港集团", "中国国贸", "宁沪高速",
-    "伟明环保", "凌霄泵业", "华荣股份", "思维列控",
-    "国电南瑞", "宝信软件", "时代电气", "华测导航",
-    "扬农化工", "安迪苏", "天坛生物",
+    "中国神华", "中国海油", "中国石油",
+    "建设银行", "工商银行", "农业银行", "交通银行", "中国银行",
+    "伊利股份", "双汇发展", "贵州茅台", "五粮液", "泸州老窖",
+    "片仔癀", "同仁堂",
+    "宝钢股份", "牧原股份",
+    "中国平安", "新华保险", "中国人寿", "中国人保",
+    "宁沪高速",
 }
 
 CAT_MAP = {
@@ -56,6 +51,27 @@ CAT_MAP = {
         "汽车零部件", "摩托车", "金属制品", "塑料",
     },
 }
+
+
+def load_framework_names():
+    """从 framework_state.json 动态读取框架股名单（trigger + holdings）"""
+    names = set()
+    try:
+        with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for code, info in data.get("trigger", {}).items():
+            n = info.get("name")
+            if n:
+                names.add(n)
+        for code, info in data.get("holdings", {}).items():
+            if code == "cash":
+                continue
+            n = info.get("name")
+            if n:
+                names.add(n)
+    except Exception as e:
+        print(f"  [WARN] 读取 {FRAMEWORK_FILE} 失败: {e}")
+    return names
 
 
 def to_ts_code(code):
@@ -122,8 +138,6 @@ def get_latest_trade_date(now):
             open_days.append(row[fc["cal_date"]])
     open_days.sort()
 
-    # 数据更新边界：daily_basic 收盘后才更新
-    # 早于 17:00 跑，当天估值数据未生成，回退到上一个开盘日
     today = now.strftime("%Y%m%d")
     if now.hour < 17:
         open_days = [d for d in open_days if d < today]
@@ -133,7 +147,11 @@ def get_latest_trade_date(now):
 
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 全市场扫描 v7.2 {now:%Y-%m-%d}")
+    print(f"[START] 全市场扫描 v7.3 {now:%Y-%m-%d}")
+
+    framework_names = load_framework_names()
+    exclude_names = EXISTING | framework_names
+    print(f"  [排除] 硬编码{len(EXISTING)} + 框架动态{len(framework_names)} = 共{len(exclude_names)}只")
 
     latest_td = get_latest_trade_date(now)
     print(f"  [0] 最近交易日: {latest_td}")
@@ -224,7 +242,7 @@ def main():
     results = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
     for code, s in stocks.items():
         name = s["name"]
-        if name in EXISTING:
+        if name in exclude_names:
             continue
 
         ind = s.get("industry", "")
