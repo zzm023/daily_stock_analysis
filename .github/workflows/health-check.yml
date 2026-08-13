@@ -1,23 +1,27 @@
-name: 持仓九宫格
+name: 持仓体检·仓位风控
 
 on:
   schedule:
-    - cron: '0 8 * * 1'
-  workflow_dispatch:
+    - cron: '0 0 * * 1'   # 周一 08:00 北京时间
+  workflow_dispatch:        # 支持手动运行
 
 jobs:
   health-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install requests
-      - name: 持仓九宫格
+
+      - name: 安装依赖
+        run: pip install requests
+
+      - name: 运行持仓体检
+        run: python health_check.py
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-          PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-        run: python health_check.py
+          PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
