@@ -1,5 +1,5 @@
 """
-聪明钱联动哨兵 v1.0（任务⑦）
+聪明钱联动哨兵 v1.1（任务⑦）
 功能：持仓股+买入候选的主力资金流向（聪明钱信号）
 数据源：Tushare moneyflow（个股资金流向）
 联动：聪明钱流入+接近触发价=强买点；聪明钱流出持仓=警示
@@ -15,11 +15,11 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 FRAMEWORK_FILE = "framework_state.json"
 BATCH_SIZE = 20
-EXCLUDE = {"002747"}   # 埃斯顿（负成本，已了结）
 GAP_LIMIT = 10.0
-DAYS = 5            # 观察最近5个交易日
-INFLOW_TH = 3000    # 主力累计净流入阈值（万元）→ 关注
-OUTFLOW_TH = 3000   # 主力累计净流出阈值（万元）→ 警示
+DAYS = 5
+INFLOW_TH = 3000
+OUTFLOW_TH = 3000
+EXCLUDE = {"002747"}   # 埃斯顿（负成本，已了结）
 
 
 def to_tscode(code):
@@ -98,11 +98,11 @@ def main():
     pro = ts.pro_api(TUSHARE_TOKEN)
     trigger, holdings = load_framework()
 
-    # 监控范围：持仓股 + gap≤10%的候选
+    # 监控范围：持仓股（排除埃斯顿）+ gap≤10%的候选
     targets = {}
     for code, info in holdings.items():
-       if code in EXCLUDE:
-           continue
+        if code in EXCLUDE:
+            continue
         targets[code] = {"name": info.get("name", code), "is_hold": True, "trigger": trigger.get(code, {}).get("trigger_price", 0) or 0}
 
     secids = [to_secid(c) for c in targets.keys()]
@@ -119,13 +119,12 @@ def main():
 
     for code, info in trigger.items():
         tp = info.get("trigger_price", 0) or 0
-        if tp <= 0 or code in targets:
+        if tp <= 0 or code in targets or code in EXCLUDE:
             continue
         price = quote_map.get(code, 0)
         if price > 0 and (price - tp) / tp * 100 <= GAP_LIMIT:
             targets[code] = {"name": info.get("name", code), "is_hold": False, "trigger": tp}
 
-    # 拉 moneyflow（最近5个交易日）
     end = (now - timedelta(days=1)).strftime("%Y%m%d")
     start = (now - timedelta(days=DAYS + 15)).strftime("%Y%m%d")
 
@@ -139,7 +138,7 @@ def main():
                                fields='ts_code,trade_date,net_mf_amount')
             if df is not None and not df.empty:
                 df = df.sort_values("trade_date").tail(DAYS)
-                net = df["net_mf_amount"].sum()   # 万元
+                net = df["net_mf_amount"].sum()
                 if net >= INFLOW_TH:
                     inflow.append((meta["name"], code, net, meta["is_hold"], meta["trigger"]))
                 elif net <= -OUTFLOW_TH:
