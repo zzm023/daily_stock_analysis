@@ -1,169 +1,163 @@
 #!/usr/bin/env python3
 """
-每周复盘 v2：PE / PB / 距触发价汇总
-联动 framework_state.json：读触发价 → 更新现价
-数据源：新浪财经 — 每周六 18:00
+每周复盘 v3：PE / PB / 距触发价汇总
+联动 framework_state.json：读触发价 + 动态股票清单
+数据源：Tushare daily_basic（PE/PB/收盘价）— 每周六 18:00
 """
-import requests
-import re
 import os
 import json
-import subprocess
-import time
-from datetime import datetime
-from pathlib import Path
+import requests
+from datetime import datetime, timedelta, timezone
+import tushare as ts
 
-STATE_FILE = Path(__file__).parent / "framework_state.json"
-
-# 全量股票（仅用于属性标注，触发价从状态文件读）
-STOCKS = [
-    {"code": "600036", "name": "招商银行",  "attr": "①永续债"},
-    {"code": "601601", "name": "中国太保",  "attr": "①永续债"},
-    {"code": "600018", "name": "上港集团",  "attr": "①永续债"},
-    {"code": "601816", "name": "京沪高铁",  "attr": "①永续债"},
-    {"code": "600900", "name": "长江电力",  "attr": "①永续债"},
-    {"code": "600941", "name": "中国移动",  "attr": "①永续债"},
-    {"code": "600406", "name": "国电南瑞",  "attr": "①永续债"},
-    {"code": "600598", "name": "北大荒",    "attr": "①永续债"},
-    {"code": "603568", "name": "伟明环保",  "attr": "①永续债"},
-    {"code": "600007", "name": "中国国贸",  "attr": "①永续债"},
-    {"code": "000429", "name": "粤高速A",   "attr": "①永续债"},
-    {"code": "000895", "name": "双汇发展",  "attr": "②高息成长"},
-    {"code": "000848", "name": "承德露露",  "attr": "②高息成长"},
-    {"code": "000157", "name": "中联重科",  "attr": "③周期拐点"},
-    {"code": "600585", "name": "海螺水泥",  "attr": "③周期拐点"},
-    {"code": "000792", "name": "盐湖股份",  "attr": "③周期拐点"},
-    {"code": "600188", "name": "兖矿能源",  "attr": "③周期拐点"},
-    {"code": "002601", "name": "龙佰集团",  "attr": "③周期拐点"},
-    {"code": "600299", "name": "安迪苏",    "attr": "③周期拐点"},
-    {"code": "300498", "name": "温氏股份",  "attr": "③周期拐点"},
-    {"code": "000651", "name": "格力电器",  "attr": "④全球寡头"},
-    {"code": "600066", "name": "宇通客车",  "attr": "④全球寡头"},
-    {"code": "000333", "name": "美的集团",  "attr": "④全球寡头"},
-    {"code": "600690", "name": "海尔智家",  "attr": "④全球寡头"},
-    {"code": "600031", "name": "三一重工",  "attr": "④全球寡头"},
-    {"code": "600309", "name": "万华化学",  "attr": "④全球寡头"},
-    {"code": "600660", "name": "福耀玻璃",  "attr": "④全球寡头"},
-    {"code": "600761", "name": "安徽合力",  "attr": "④全球寡头"},
-    {"code": "600486", "name": "扬农化工",  "attr": "④全球寡头"},
-    {"code": "601058", "name": "赛轮轮胎",  "attr": "④全球寡头"},
-    {"code": "603806", "name": "福斯特",    "attr": "④全球寡头"},
-    {"code": "000708", "name": "中信特钢",  "attr": "④全球寡头"},
-    {"code": "002027", "name": "分众传媒",  "attr": "⑤品牌心智"},
-    {"code": "000538", "name": "云南白药",  "attr": "⑤品牌心智"},
-    {"code": "603605", "name": "珀莱雅",    "attr": "⑤品牌心智"},
-    {"code": "605098", "name": "行动教育",  "attr": "⑤品牌心智"},
-    {"code": "600298", "name": "安琪酵母",  "attr": "⑤品牌心智"},
-    {"code": "300628", "name": "亿联网络",  "attr": "⑤品牌心智"},
-    {"code": "002508", "name": "老板电器",  "attr": "⑤品牌心智"},
-    {"code": "002032", "name": "苏泊尔",    "attr": "⑤品牌心智"},
-    {"code": "002884", "name": "凌霄泵业",  "attr": "⑥小众冠军"},
-    {"code": "002318", "name": "久立特材",  "attr": "⑥小众冠军"},
-    {"code": "603855", "name": "华荣股份",  "attr": "⑥小众冠军"},
-    {"code": "603288", "name": "海天味业",  "attr": "⑥小众冠军"},
-    {"code": "603508", "name": "思维列控",  "attr": "⑥小众冠军"},
-    {"code": "600161", "name": "天坛生物",  "attr": "⑥小众冠军"},
-    {"code": "300832", "name": "新产业",    "attr": "科技✅⚠"},
-    {"code": "688187", "name": "时代电气",  "attr": "科技✅⚠"},
-    {"code": "300124", "name": "汇川技术",  "attr": "科技✅⚠"},
-    {"code": "002837", "name": "英维克",    "attr": "科技✅⚠"},
-    {"code": "300627", "name": "华测导航",  "attr": "科技✅⚠"},
-    {"code": "002410", "name": "广联达",    "attr": "科技✅⚠"},
-]
-
-ATTR_ORDER = {
-    "①永续债":0,"②高息成长":1,"③周期拐点":2,"④全球寡头":3,
-    "⑤品牌心智":4,"⑥小众冠军":5,"科技✅⚠":6,
-}
-ATTR_LABEL = {
-    "①永续债":"🏰 ①永续债","②高息成长":"💵 ②高息成长",
-    "③周期拐点":"🔄 ③周期拐点","④全球寡头":"🌍 ④全球寡头",
-    "⑤品牌心智":"🧠 ⑤品牌心智","⑥小众冠军":"🏆 ⑥小众冠军",
-    "科技✅⚠":"⚡ 科技",
-}
-
+STATE_FILE = "framework_state.json"
+TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
+# 分类映射（code → attr），六类框架 + 科技
+ATTR_MAP = {
+    "600036": "①永续债", "601601": "①永续债", "600018": "①永续债",
+    "601816": "①永续债", "600900": "①永续债", "600941": "①永续债",
+    "600406": "①永续债", "600598": "①永续债", "603568": "①永续债",
+    "600007": "①永续债", "000429": "①永续债",
+    "000157": "③周期拐点", "600585": "③周期拐点", "000792": "③周期拐点",
+    "600188": "③周期拐点", "002601": "③周期拐点", "600299": "③周期拐点",
+    "300498": "③周期拐点",
+    "000651": "④全球寡头", "600066": "④全球寡头", "000333": "④全球寡头",
+    "600690": "④全球寡头", "600031": "④全球寡头", "600309": "④全球寡头",
+    "600660": "④全球寡头", "600761": "④全球寡头", "600486": "④全球寡头",
+    "601058": "④全球寡头", "603806": "④全球寡头", "000708": "④全球寡头",
+    "002027": "⑤品牌心智", "000538": "⑤品牌心智", "603605": "⑤品牌心智",
+    "605098": "⑤品牌心智", "600298": "⑤品牌心智", "300628": "⑤品牌心智",
+    "002508": "⑤品牌心智", "002032": "⑤品牌心智",
+    "002884": "⑥小众冠军", "002318": "⑥小众冠军", "603855": "⑥小众冠军",
+    "603288": "⑥小众冠军", "603508": "⑥小众冠军", "600161": "⑥小众冠军",
+    "300832": "科技✅⚠", "688187": "科技✅⚠", "300124": "科技✅⚠",
+    "002837": "科技✅⚠", "300627": "科技✅⚠", "002410": "科技✅⚠",
+}
+
+ATTR_ORDER = {
+    "①永续债": 0, "②高息成长": 1, "③周期拐点": 2, "④全球寡头": 3,
+    "⑤品牌心智": 4, "⑥小众冠军": 5, "科技✅⚠": 6,
+}
+ATTR_LABEL = {
+    "①永续债": "🏰 ①永续债", "②高息成长": "💵 ②高息成长",
+    "③周期拐点": "🔄 ③周期拐点", "④全球寡头": "🌍 ④全球寡头",
+    "⑤品牌心智": "🧠 ⑤品牌心智", "⑥小众冠军": "🏆 ⑥小众冠军",
+    "科技✅⚠": "⚡ 科技",
+}
+
 
 def load_state():
-    if STATE_FILE.exists():
+    try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"trigger": {}, "holdings": {}}
+    except Exception as e:
+        print(f"[WARN] 读取 {STATE_FILE} 失败: {e}")
+        return {"trigger": {}, "holdings": {}}
 
 
-def fetch_all_prices():
-    codes = list(set(s["code"] for s in STOCKS))
-    symbols = []
-    for code in codes:
-        prefix = "sh" if code.startswith("6") else "sz"
-        symbols.append(f"{prefix}{code}")
+def to_ts_code(code):
+    if code.startswith("6"):
+        return code + ".SH"
+    elif code.startswith(("0", "3")):
+        return code + ".SZ"
+    elif code.startswith(("8", "4")):
+        return code + ".BJ"
+    return code
 
+
+def get_latest_trade_date(pro, now):
+    end = now.strftime("%Y%m%d")
+    start = (now - timedelta(days=15)).strftime("%Y%m%d")
+    try:
+        df = pro.trade_cal(exchange="SSE", start_date=start, end_date=end,
+                           is_open="1")
+        if df is not None and not df.empty:
+            return str(df["cal_date"].max())
+    except Exception as e:
+        print(f"  [trade_cal] {e}")
+    return None
+
+
+def fetch_quotes(pro, codes, latest_td):
+    """Tushare daily_basic 批量拿 pe/pb/收盘价"""
     lookup = {}
-    batch_size = 25
-    headers = {"Referer": "https://finance.sina.com.cn"}
-
-    for i in range(0, len(symbols), batch_size):
-        batch = symbols[i:i+batch_size]
-        url = "https://hq.sinajs.cn/list=" + ",".join(batch)
-        resp = None
-        for retry in range(3):
-            try:
-                resp = requests.get(url, headers=headers, timeout=15)
-                break
-            except Exception:
-                if retry < 2:
-                    time.sleep(3 * (retry + 1))
-        if resp is None:
-            continue
-        try:
-            resp.encoding = "gbk"
-            for line in resp.text.strip().split("\n"):
-                m = re.search(r'hq_str_(\w+)="(.+)"', line)
-                if not m:
-                    continue
-                sym = m.group(1)
-                fields = m.group(2).split(",")
-                code = sym[2:]
+    ts_codes = ",".join(to_ts_code(c) for c in codes)
+    try:
+        df = pro.daily_basic(ts_code=ts_codes, trade_date=latest_td,
+                             fields="ts_code,close,pe,pb")
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                code = str(row["ts_code"]).split(".")[0]
                 try:
-                    price = float(fields[3]) if fields[3] else 0
-                    pe = float(fields[39]) if len(fields)>39 and fields[39] else 0
-                    pb = float(fields[42]) if len(fields)>42 and fields[42] else 0
-                    lookup[code] = {"price": price, "pe": pe, "pb": pb}
-                except (ValueError, IndexError):
-                    pass
-        except Exception:
-            pass
-
+                    close = float(row["close"]) if row["close"] else 0
+                except:
+                    close = 0
+                try:
+                    pe = float(row["pe"]) if row["pe"] else 0
+                except:
+                    pe = 0
+                try:
+                    pb = float(row["pb"]) if row["pb"] else 0
+                except:
+                    pb = 0
+                lookup[code] = {"price": close, "pe": pe, "pb": pb}
+    except Exception as e:
+        print(f"  [daily_basic] {e}")
     return lookup
 
 
 def push(title, content):
     if not PUSHPLUS_TOKEN:
-        print("[WARN] 无TOKEN"); return
+        print("[WARN] 无TOKEN")
+        return
     try:
-        payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
+        payload = {"token": PUSHPLUS_TOKEN, "title": title,
+                   "content": content, "template": "markdown"}
         if PUSHPLUS_TOPIC:
             payload["topic"] = PUSHPLUS_TOPIC
         r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
-        print(f"[{'OK' if r.json().get('code')==200 else 'FAIL'}] PushPlus")
+        print(f"[{'OK' if r.json().get('code') == 200 else 'FAIL'}] PushPlus")
     except Exception as e:
         print(f"[PushPlus] {e}")
 
 
 def main():
-    now = datetime.now()
-    print(f"[START] 每周复盘 v2 {now:%Y-%m-%d %H:%M}")
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    print(f"[START] 每周复盘 v3 {now:%Y-%m-%d %H:%M}")
 
+    if not TUSHARE_TOKEN:
+        print("[SKIP] 未配置 TUSHARE_TOKEN")
+        return
+
+    pro = ts.pro_api(TUSHARE_TOKEN)
     state = load_state()
     trigger = state.get("trigger", {})
-    data = fetch_all_prices()
+
+    # 股票清单从 trigger 动态读，匹配分类
+    stocks = []
+    for code, info in trigger.items():
+        stocks.append({
+            "code": code,
+            "name": info.get("name", code),
+            "attr": ATTR_MAP.get(code, "其他"),
+        })
+
+    latest_td = get_latest_trade_date(pro, now)
+    print(f"  最近交易日: {latest_td}")
+    if not latest_td:
+        push(f"📊 每周复盘 {now:%Y.%m.%d}", "## 📊 每周复盘\n\n无法获取交易日。")
+        return
+
+    data = fetch_quotes(pro, [s["code"] for s in stocks], latest_td)
+    print(f"  行情覆盖: {len(data)}/{len(stocks)}")
 
     lines = [f"## 📊 每周复盘 — {now:%Y.%m.%d}", "",
-             f"> PE / PB / 距触发价 ｜ {now:%m-%d %H:%M}", ""]
+             f"> PE / PB / 距触发价 ｜ 数据日 {latest_td}", ""]
 
-    stocks_sorted = sorted(STOCKS, key=lambda s: (ATTR_ORDER.get(s["attr"],99), s["code"]))
+    stocks_sorted = sorted(stocks, key=lambda s: (ATTR_ORDER.get(s["attr"], 99), s["code"]))
     cur, total, hit, close_10 = None, 0, 0, 0
 
     for s in stocks_sorted:
@@ -179,7 +173,6 @@ def main():
         pe = row.get("pe", 0)
         pb = row.get("pb", 0)
 
-        # 触发价从状态文件读
         tp = trigger.get(code, {}).get("trigger_price", 0)
 
         ps = f"{price:.2f}" if price else "-"
