@@ -1,204 +1,214 @@
 """
-持仓九宫格 v5 - Tushare数据层
+持仓体检 v1.0（任务③）
+功能：仓位风控（单只vs预算 + 属性类别vs六类七层上限）
+数据源：framework_state.json（持仓/现金） + 东财现价 + 属性预算映射
+运行：收盘后 16:30（每日）
+注意：东财f2返回"分"需÷100；属性/预算严格取framework_stocks.md
 """
-import os, json, requests, re, time
-from datetime import datetime
-from pathlib import Path
 
-STATE_FILE = Path(__file__).parent / "framework_state.json"
+import os, json, time, requests
+from datetime import datetime, timedelta, timezone
+
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
+FRAMEWORK_FILE = "framework_state.json"
+BATCH_SIZE = 20
 
-# 本地兜底（Tushare 挂的时候用）
-GROWTH_FB = {
-    "600036": 1.2, "601601": 64.9, "600031": 27.4,
-    "600585": -26.0, "600188": 8.5, "600660": 25.0,
-    "600941": 5.2, "000333": 14.3, "688187": 24.8,
-    "603288": -18.0, "600900": 7.3, "000651": 10.2,
-    "002601": 45.0, "600161": 46.5, "300498": 110.0,
-    "600690": 12.8, "000157": 41.5, "002747": -20.0,
-}
-DIV_FB = {
-    "600036": 1.97, "601601": 1.02, "600031": 0.39,
-    "600585": 1.48, "600188": 1.49, "600660": 1.30,
-    "600941": 4.80, "000333": 3.00, "688187": 1.55,
-    "603288": 0.75, "600900": 0.82, "000651": 2.38,
-    "002601": 0.40, "600161": 0.05, "300498": 0.20,
-    "600690": 0.38, "000157": 0.16, "002747": 0.00,
+# 持仓股属性 + 买入预算（来源 framework_stocks.md，勿随意改）
+HOLDINGS_META = {
+    "600845": {"attr": "框架外", "budget": 0},
+    "600161": {"attr": "⑥小众冠军", "budget": 18000},
+    "300498": {"attr": "③周期拐点", "budget": 12000},
+    "002601": {"attr": "③周期拐点", "budget": 24000},
+    "002027": {"attr": "⑤品牌心智", "budget": 36000},
+    "000708": {"attr": "④全球寡头", "budget": 30000},
+    "600690": {"attr": "④全球寡头", "budget": 36000},
+    "000157": {"attr": "③周期拐点", "budget": 36000},
 }
 
+# 六类七层仓位上限（占总资产%）
+ATTR_CAP = {
+    "①永续债": 15,
+    "②高息成长": 8,
+    "③周期拐点": 3,
+    "④全球寡头": 2,
+    "⑤品牌心智": 8,
+    "⑥小众冠军": 8,
+}
 
-def batch_tencent(codes):
-    results = {}
-    for i in range(0, len(codes), 30):
-        batch = codes[i:i + 30]
-        symbols = ",".join(f"sh{c}" if c.startswith("6") else f"sz{c}" for c in batch)
-        try:
-            r = requests.get(f"http://qt.gtimg.cn/q={symbols}", timeout=15)
-            r.encoding = "gbk"
-            for c in batch:
-                prefix = "sh" if c.startswith("6") else "sz"
-                m = re.search(f"v_{prefix}{c}=\"[^\"]*\"", r.text)
-                if not m:
-                    continue
-                parts = m.group().split("~")
-                if len(parts) < 48:
-                    continue
-                try:
-                    price = float(parts[3]) if parts[3] else None
-                    pe = float(parts[39]) if parts[39] and parts[39] != "-" else None
-                    pb = float(parts[46]) if parts[46] and parts[46] != "-" else None
-                    if price:
-                        results[c] = {"price": price, "pe": pe, "pb": pb}
-                except:
-                    pass
-        except:
-            pass
-    return results
+
+def to_secid(code):
+    if code.startswith(("6", "9")):
+        return "1." + code
+    return "0." + code
+
+
+def load_framework():
+    try:
+        with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except:
+        return {}, 0
+    holdings = {k: v for k, v in data.get("holdings", {}).items() if k != "cash"}
+    cash = data.get("holdings", {}).get("cash", 0)
+    return holdings, cash
+
+
+def fetch_prices(secids, retries=3):
+    url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://quote.eastmoney.com/",
+    }
+    all_diff = []
+    for i in range(0, len(secids), BATCH_SIZE):
+        batch = secids[i:i + BATCH_SIZE]
+        batch_no = i // BATCH_SIZE + 1
+        ok = False
+        for attempt in range(retries):
+            try:
+                r = requests.get(url, params={"secids": ",".join(batch), "fields": "f2,f12,f14"},
+                                 headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                diff = data.get("data", {}).get("diff", [])
+                if diff:
+                    all_diff.extend(diff)
+                    ok = True
+                    break
+            except Exception as e:
+                print(f"  [东财] 第{batch_no}批 第{attempt+1}次失败: {e}")
+            time.sleep(3)
+        if not ok:
+            print(f"  [东财] 第{batch_no}批 重试{retries}次仍失败")
+        time.sleep(2)
+    return all_diff
 
 
 def push(title, content):
     if not PUSHPLUS_TOKEN:
         return
     try:
-        requests.post("http://www.pushplus.plus/send", json={
-            "token": PUSHPLUS_TOKEN, "title": title, "content": content,
-            "template": "markdown", "topic": PUSHPLUS_TOPIC,
+        r = requests.post("http://www.pushplus.plus/send", json={
+            "token": PUSHPLUS_TOKEN, "title": title,
+            "content": content, "template": "markdown",
+            "topic": PUSHPLUS_TOPIC,
         }, timeout=10)
-    except:
-        pass
+        print(f"  [Push] {'OK' if r.json().get('code') == 200 else r.json()}")
+    except Exception as e:
+        print(f"  [Push] {e}")
 
 
 def main():
-    now = datetime.now()
-    print(f"[START] 九宫格 v5 {now:%Y-%m-%d}")
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    print(f"[START] 持仓体检 {now:%m-%d %H:%M}")
 
-    with open(STATE_FILE, "r") as f:
-        state = json.load(f)
+    holdings, cash = load_framework()
 
-    hold = state.get("holdings", {})
-    trigger = state.get("trigger", {})
-    cash = hold.get("cash", 0)
-    hold_codes = [c for c in hold if c != "cash" and isinstance(hold.get(c), dict)]
-
-    quotes = batch_tencent(hold_codes)
-
-    # ── Tushare 利润 & 分红 ──
-    growth = {}
-    divs = {}
-    try:
-        from tushare_data import get_profit_growth, get_dividends, auto_whitelist
-        auto_whitelist()
-        growth = get_profit_growth(hold_codes)
-        divs = get_dividends(hold_codes)
-        print(f"  Tushare 利润{len(growth)}只 分红{len(divs)}只")
-    except Exception as e:
-        print(f"  Tushare 失败: {e}，用兜底")
-
-    total_mv = cash
-    rows = []
-
-    for code in hold_codes:
-        v = hold[code]
-        name = v.get("name", code)
-        shares = v.get("shares", 0)
-        cost = v.get("cost", 0)
-
-        q = quotes.get(code, {})
-        price = q.get("price", cost)
-        pe = q.get("pe")
-        pb = q.get("pb")
-        mv = price * shares
-        total_mv += mv
-
-        tp = 0
-        if isinstance(trigger.get(code), dict):
-            tp = trigger[code].get("trigger_price", 0)
-        dist_pct = ((price - tp) / tp * 100) if tp > 0 else None
-
-        # 分红: Tushare优先 → 兜底 → 0
-        dps = divs.get(code) or DIV_FB.get(code, 0)
-        div_total = shares * dps
-        div_yield = (dps / price * 100) if price > 0 and dps > 0 else None
-
-        # 利润: Tushare优先 → 兜底
-        profit = growth.get(code) or GROWTH_FB.get(code)
-
-        s = 5.0
-        if pe is not None:
-            if pe < 8: s += 2
-            elif pe < 15: s += 1
-            elif pe > 50: s -= 2
-            elif pe > 30: s -= 1
-        if profit is not None:
-            if profit > 20: s += 1.5
-            elif profit > 10: s += 0.5
-            elif profit < -20: s -= 2
-            elif profit < -10: s -= 1
-        if dist_pct is not None:
-            if dist_pct < 5: s += 1
-            elif dist_pct > 30: s -= 1
-        if div_yield is not None:
-            if div_yield > 4: s += 1
-            elif div_yield > 2: s += 0.5
-        s = round(max(0, min(10, s)), 1)
-
-        rows.append({
-            "name": name, "price": price, "pe": pe, "pb": pb,
-            "mv": mv, "tp": tp, "dist_pct": dist_pct,
-            "div_yield": div_yield, "div_total": div_total,
-            "profit": profit, "score": s,
+    # 持仓（仅框架内 + 框架外宝信）
+    positions = []
+    for code, info in holdings.items():
+        if code not in HOLDINGS_META:
+            continue
+        positions.append({
+            "code": code,
+            "name": info.get("name", code),
+            "cost": info.get("cost", 0) or 0,
+            "shares": info.get("shares", 0) or 0,
+            "attr": HOLDINGS_META[code]["attr"],
+            "budget": HOLDINGS_META[code]["budget"],
         })
 
+    if not positions:
+        push(f"📊 持仓体检 {now:%m-%d}", "## 持仓体检\n\n无持仓。")
+        return
+
+    secids = [to_secid(p["code"]) for p in positions]
+    quotes = fetch_prices(secids)
+    if not quotes:
+        print("[SKIP] 行情为空")
+        return
+
+    quote_map = {}
+    for q in quotes:
+        code = q.get("f12", "")
+        try:
+            price = float(q.get("f2", 0)) / 100
+        except:
+            price = 0
+        if code:
+            quote_map[code] = price
+
+    # 计算市值
+    rows = []
+    total_mv = 0
+    for p in positions:
+        price = quote_map.get(p["code"])
+        if price is None or price <= 0:
+            continue
+        mv = price * p["shares"]
+        total_mv += mv
+        rows.append({**p, "price": price, "mv": mv})
+
+    total_asset = total_mv + cash
+
+    # 单只超预算
+    over_budget = [r for r in rows if r["budget"] > 0 and r["mv"] > r["budget"]]
+
+    # 属性汇总
+    attr_sum = {}
     for r in rows:
-        r["weight"] = (r["mv"] / total_mv * 100) if total_mv > 0 else 0
-    rows.sort(key=lambda x: x["score"], reverse=True)
+        if r["attr"] == "框架外":
+            continue
+        attr_sum.setdefault(r["attr"], 0)
+        attr_sum[r["attr"]] += r["mv"]
 
-    def fmt(r):
-        p = []
-        p.append(f"PE{r['pe']:.0f}" if r["pe"] else "PE?")
-        if r["profit"] is not None: p.append(f"利{r['profit']:+.0f}%")
-        if r["dist_pct"] is not None: p.append(f"距{r['dist_pct']:+.0f}%")
-        if r["div_yield"]: p.append(f"息{r['div_yield']:.1f}%")
-        p.append(f"仓{r['weight']:.0f}%")
-        return "  ".join(p)
+    over_attr = []
+    for attr, mv in attr_sum.items():
+        cap = ATTR_CAP.get(attr, 0)
+        if cap > 0 and mv > cap / 100 * total_asset:
+            over_attr.append((attr, mv, cap))
 
-    good = [r for r in rows if r["score"] >= 6]
-    warn = [r for r in rows if 4 <= r["score"] < 6]
-    bad = [r for r in rows if r["score"] < 4]
+    print(f"  单只超预算 {len(over_budget)} | 属性超上限 {len(over_attr)} | 总资产 {total_asset:.0f}")
 
     lines = [
-        f"持仓体检 {now:%m}.{now:%d}",
-        f"总{total_mv/10000:.1f}万 | 现金{cash/10000:.1f}万 | 仓位{(total_mv-cash)/total_mv*100:.0f}%",
+        f"## 📊 持仓体检 {now:%m-%d %H:%M}",
+        f"总资产{total_asset:.0f} · 现金{cash:.0f} · 单只超预算{len(over_budget)} · 属性超限{len(over_attr)}",
+        "",
     ]
-    if good:
-        lines.append(""); lines.append("◆ 健康")
-        for r in good:
-            lines.append(f"🟢 {r['name']} {r['score']}")
-            lines.append(f"   {fmt(r)}")
-    if warn:
-        lines.append(""); lines.append("◆ 注意")
-        for r in warn:
-            lines.append(f"🟡 {r['name']} {r['score']}")
-            lines.append(f"   {fmt(r)}")
-    if bad:
-        lines.append(""); lines.append("◆ 危险")
-        for r in bad:
-            lines.append(f"🔴 {r['name']} {r['score']}")
-            lines.append(f"   {fmt(r)}")
 
-    total_div = sum(r["div_total"] for r in rows)
-    lines.append(""); lines.append(f"💵 全年分红 {total_div/10000:.2f}万")
+    if over_budget:
+        lines.append("**🔴 单只超预算（市值>框架预算）**")
+        lines.append("")
+        for r in over_budget:
+            times = r["mv"] / r["budget"]
+            lines.append(f"· {r['name']}({r['code']}) 市值{r['mv']:.0f} 预算{r['budget']:.0f} 超{times:.1f}倍")
+            lines.append("")
 
-    buy_zone = [r for r in rows if r["dist_pct"] is not None and r["dist_pct"] < 5 and r["score"] >= 5]
-    if buy_zone:
-        lines.append(f"🎯 加仓区 {' '.join(r['name'] for r in buy_zone)}")
+    if over_attr:
+        lines.append("**🔴 属性超上限（六类七层）**")
+        lines.append("")
+        for attr, mv, cap in over_attr:
+            pct = mv / total_asset * 100
+            lines.append(f"· {attr} 合计{mv:.0f}元 占比{pct:.1f}% 上限{cap}%")
+            lines.append("")
 
+    lines.append("**📋 持仓仓位明细**")
     lines.append("")
-    lines.append("> PE 利=利润增速 距=距触发价 息=股息率 | Tushare+腾讯")
+    for r in rows:
+        pct = r["mv"] / total_asset * 100
+        if r["budget"] > 0 and r["mv"] > r["budget"]:
+            mark = "🔴"
+        else:
+            mark = "🟢"
+        budget_str = f" 预算{r['budget']:.0f}" if r["budget"] > 0 else ""
+        lines.append(f"{mark} {r['name']}({r['code']}) {r['attr']} 市值{r['mv']:.0f} 占比{pct:.1f}%{budget_str}")
+        lines.append("")
 
-    push(f"持仓体检 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE]")
+    lines.append("⚠️ 超预算/超限的是历史遗留仓位，逢反弹逐步降到框架线内，不再加仓超限标的。")
+
+    push(f"📊 持仓体检（超预算{len(over_budget)}/超限{len(over_attr)}）", "\n".join(lines))
+    print("[DONE] 推送完成")
 
 
 if __name__ == "__main__":
