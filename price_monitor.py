@@ -1,9 +1,10 @@
 """
-触发价总监控 v1.0（任务①）
+触发价总监控 v1.1（任务①）
 功能：已触发 + 即将触发 + 买入清单 + 距触发价排行
 数据源：framework_state.json（触发价/PE/PB锚点/持仓） + 东财实时价(收盘价)
 联动：买入清单 = gap≤10% + PE≤pe_upper + PB≤pb_lower（锚点严格取框架，不猜测）
 运行：收盘后 15:45
+注意：东财f2/f18返回"分"，需÷100转元
 """
 
 import os, json, time, requests
@@ -24,7 +25,6 @@ def to_secid(code):
 
 
 def load_framework():
-    """读 framework_state.json → (trigger, holdings)"""
     try:
         with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -106,7 +106,7 @@ def main():
     for q in quotes:
         code = q.get("f12", "")
         try:
-            price = float(q.get("f2", 0))
+            price = float(q.get("f2", 0)) / 100   # 分 → 元
             pe = float(q.get("f9", 0))
             pb = float(q.get("f23", 0))
         except:
