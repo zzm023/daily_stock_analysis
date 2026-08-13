@@ -23,7 +23,7 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install requests
+          pip install tushare requests
 
       - name: 运行每周复盘
         env:
