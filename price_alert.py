@@ -1,8 +1,9 @@
 """
-价格异动监控（盘中实时）v3.2
+价格异动监控（盘中实时）v3.3
 和触发价联动：持仓(±3%) + gap≤10%观察股(±5%)
 数据源：framework_state.json（触发价+持仓） + 东财实时价
-涨跌幅 = (最新价f2 - 昨收f18) / 昨收f18，自算不依赖f3
+涨跌幅 = (最新价f2 - 昨收f18) / 昨收f18，自算
+注意：东财f2/f18返回"分"，需÷100转元
 """
 
 import os, json, time, requests
@@ -23,7 +24,6 @@ EXCLUDE = {"002747"}    # 埃斯顿（负成本，不监控）
 
 
 def to_secid(code):
-    """6位代码 → 东财secid"""
     if code.startswith(("6", "9")):
         return "1." + code
     return "0." + code
@@ -84,7 +84,6 @@ def save_state(state):
 
 
 def load_framework():
-    """读 framework_state.json → (trigger价dict, 持仓dict)"""
     try:
         with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -104,7 +103,6 @@ def main():
 
     trigger, holdings = load_framework()
 
-    # 候选：持仓(除EXCLUDE) + trigger_price>0 的观察股
     candidates = {}
     for code, info in holdings.items():
         if code in EXCLUDE:
@@ -134,8 +132,8 @@ def main():
     for q in quotes:
         code = q.get("f12", "")
         try:
-            price = float(q.get("f2", 0))
-            prev_close = float(q.get("f18", 0))
+            price = float(q.get("f2", 0)) / 100        # 分 → 元
+            prev_close = float(q.get("f18", 0)) / 100  # 分 → 元
         except:
             price = 0
             prev_close = 0
