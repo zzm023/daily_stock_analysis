@@ -1,7 +1,7 @@
 """
-触发价监控（收盘后 15:45）
-读 framework_state.json 触发价（单一数据源），检查是否触及/接近触发价
-与价格异动监控共用 framework_state.json，自动同步清除目录和触发价调整
+价格异动监控（盘中实时）v3
+和触发价联动：持仓(±3%) + gap≤10%观察股(±5%)
+数据源：framework_state.json（触发价+持仓） + 东财实时价
 """
 
 import os, json, requests
@@ -9,39 +9,28 @@ from datetime import datetime, timedelta, timezone
 
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
-FRAMEWORK_FILE = "framework_state.json"
 
-GAP_CLOSE = 10.0   # 即将触发：gap ≤ 10%
+FRAMEWORK_FILE = "framework_state.json"
+STATE_FILE = "price_alert_state.json"
+
+HOLD_THRESHOLD = 3.0    # 持仓 ±3%
+WATCH_THRESHOLD = 5.0   # 观察 ±5%
+GAP_LIMIT = 10.0        # 观察股 gap≤10% 才监控（%）
+LEVELS = [3.0, 5.0, 7.0, 9.0]
+
+EXCLUDE = {"002747"}    # 埃斯顿（负成本，不监控）
 
 
 def to_secid(code):
+    """6位代码 → 东财secid"""
     if code.startswith(("6", "9")):
         return "1." + code
     return "0." + code
 
 
-def load_framework():
-    """读 framework_state.json → (trigger价dict, 持仓dict)"""
-    try:
-        with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except:
-        return {}, {}
-    trigger = data.get("trigger", {})
-    holdings = {k: v for k, v in data.get("holdings", {}).items() if k != "cash"}
-    return trigger, holdings
-
-
-def fetch_prices(secids):
-    """东财批量实时价（收盘后即收盘价）"""
-    url = "http://push2.eastmoney.com/api/qt/ulist.np/get"
-    params = {"secids": ",".join(secids), "fields": "f2,f12,f14"}
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        return r.json().get("data", {}).get("diff", [])
-    except Exception as e:
-        print(f"  [东财] {e}")
-        return []
+def is_trading_time(now):
+    hm = now.hour * 60 + now.minute
+    return (9 * 60 + 30 <= hm <= 11 * 60 + 30) or (13 * 60 <= hm <= 15 * 60)
 
 
 def push(title, content):
@@ -58,34 +47,77 @@ def push(title, content):
         print(f"  [Push] {e}")
 
 
+def fetch_quotes(secids):
+    url = "http://push2.eastmoney.com/api/qt/ulist.np/get"
+    params = {"secids": ",".join(secids), "fields": "f2,f3,f12,f14"}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        return r.json().get("data", {}).get("diff", [])
+    except Exception as e:
+        print(f"  [东财] {e}")
+        return []
+
+
+def load_state():
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False)
+
+
+def load_framework():
+    """读 framework_state.json → (trigger价dict, 持仓dict)"""
+    try:
+        with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except:
+        return {}, {}
+    trigger = data.get("trigger", {})
+    holdings = {k: v for k, v in data.get("holdings", {}).items() if k != "cash"}
+    return trigger, holdings
+
+
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 触发价监控 {now:%m-%d %H:%M}")
+
+    if now.weekday() >= 5 or not is_trading_time(now):
+        print(f"[SKIP] 非交易时段 {now:%m-%d %H:%M}")
+        return
 
     trigger, holdings = load_framework()
-    hold_codes = set(holdings.keys())
 
-    # 候选：trigger_price > 0 的股票
-    candidates = []
+    # 候选：持仓(除EXCLUDE) + trigger_price>0 的观察股
+    candidates = {}
+    for code, info in holdings.items():
+        if code in EXCLUDE:
+            continue
+        candidates[code] = {"name": info.get("name", code), "is_hold": True, "trigger": 0}
+
     for code, info in trigger.items():
         tp = info.get("trigger_price", 0) or 0
         if tp <= 0:
             continue
-        candidates.append({
-            "code": code,
-            "name": info.get("name", code),
-            "trigger": tp,
-            "attr": info.get("anchor_pct", 0),
-            "is_hold": code in hold_codes,
-        })
+        if code in candidates:
+            candidates[code]["trigger"] = tp
+        else:
+            candidates[code] = {"name": info.get("name", code), "is_hold": False, "trigger": tp}
 
     if not candidates:
-        push(f"📊 触发价监控 {now:%m-%d}", "## 触发价监控\n\nframework_state.json 无有效触发价。")
+        print("[SKIP] 无候选")
         return
 
-    # 批量拉价
-    secids = [to_secid(c["code"]) for c in candidates]
-    quotes = fetch_prices(secids)
+    # 拉实时价
+    secids = [to_secid(c) for c in candidates.keys()]
+    quotes = fetch_quotes(secids)
+    if not quotes:
+        print("[SKIP] 行情为空")
+        return
 
     price_map = {}
     for q in quotes:
@@ -94,63 +126,71 @@ def main():
             price = float(q.get("f2", 0))
         except:
             price = 0
-        if price > 0:
-            price_map[code] = price
+        if code in candidates:
+            price_map[code] = {
+                "price": price,
+                "change": float(str(q.get("f3", "0")).replace("%", "")),
+            }
 
-    hit = []    # 已触发：现价 ≤ 触发价
-    close = []  # 即将：gap ≤ 10%
-    failed = 0
+    state = load_state()
+    today = now.strftime("%Y%m%d")
+    alerts = []
+    watch_count = 0
 
-    for c in candidates:
-        code = c["code"]
-        price = price_map.get(code)
-        if price is None:
-            failed += 1
+    for code, meta in candidates.items():
+        if code not in price_map:
+            continue
+        price = price_map[code]["price"]
+        change = price_map[code]["change"]
+
+        if meta["is_hold"]:
+            threshold = HOLD_THRESHOLD
+            watch_count += 1
+        else:
+            tp = meta["trigger"]
+            if price <= 0:
+                continue
+            gap = (price - tp) / tp * 100
+            if gap > GAP_LIMIT:
+                continue          # 远离触发价，不监控
+            threshold = WATCH_THRESHOLD
+            watch_count += 1
+
+        abs_chg = abs(change)
+        if abs_chg < threshold:
             continue
 
-        gap_pct = (price - c["trigger"]) / c["trigger"] * 100
+        cur_level = 0.0
+        for lv in LEVELS:
+            if abs_chg >= lv:
+                cur_level = lv
 
-        if price <= c["trigger"]:
-            hit.append({**c, "price": price, "gap": gap_pct})
-        elif gap_pct <= GAP_CLOSE:
-            close.append({**c, "price": price, "gap": gap_pct})
+        key = f"{today}_{code}"
+        if cur_level <= state.get(key, 0):
+            continue
 
-    print(f"  已触发 {len(hit)} 只 | 即将 {len(close)} 只 | 失败 {failed} 只")
+        alerts.append((meta["name"], code, change, cur_level, meta["is_hold"], price, meta["trigger"]))
+        state[key] = cur_level
 
-    if not hit and not close:
-        print("[DONE] 无触发/即将触发，不推送")
+    if not alerts:
+        save_state(state)
+        print(f"[DONE] 无新异动，监控{watch_count}只 {now:%m-%d %H:%M}")
         return
 
-    lines = [
-        f"## 📊 触发价监控 {now:%m-%d %H:%M}",
-        f"监控 {len(candidates)} 只（framework_state.json）",
-        "",
-    ]
+    lines = [f"## ⚡ 价格异动 {now:%m-%d %H:%M}", ""]
+    for name, code, change, lv, is_hold, price, tp in alerts:
+        tag = "持仓" if is_hold else "观察"
+        arrow = "🔴" if change < 0 else "🟢"
+        gap_str = ""
+        if not is_hold and tp > 0:
+            gap_str = f"（距触发价{(price - tp) / tp * 100:.1f}%）"
+        lines.append(f"{arrow} **{name}**({code}) [{tag}] 涨跌 **{change:+.2f}%**（≥{lv:.0f}%档）{gap_str}")
+    lines.append("")
+    lines.append(f"---\n盘中监控 {watch_count}只 · {now:%m-%d %H:%M}")
 
-    if hit:
-        lines.append("### 🔥 已触发（现价 ≤ 触发价）")
-        lines.append("")
-        lines.append("| 股票 | 现价 | 触发价 | 差距 | 备注 |")
-        lines.append("|------|------|--------|------|------|")
-        for c in hit:
-            tag = "持仓·补仓" if c["is_hold"] else "待买"
-            lines.append(f"| {c['name']}({c['code']}) | {c['price']:.2f} | {c['trigger']:.2f} | {c['gap']:+.1f}% | {tag} |")
-        lines.append("")
-
-    if close:
-        lines.append("### ⏳ 即将触发（距触发 ≤10%）")
-        lines.append("")
-        lines.append("| 股票 | 现价 | 触发价 | 差距 | 备注 |")
-        lines.append("|------|------|--------|------|------|")
-        for c in close:
-            tag = "持仓·补仓" if c["is_hold"] else "待买"
-            lines.append(f"| {c['name']}({c['code']}) | {c['price']:.2f} | {c['trigger']:.2f} | {c['gap']:+.1f}% | {tag} |")
-        lines.append("")
-
-    lines.append("> ⚠️ 触发 ≠ 立即买。左侧分层：目标价打9折、仓位减半、观察1周。")
-
-    push(f"📊 触发价监控（{len(hit)}触发/{len(close)}临近）", "\n".join(lines))
-    print("[DONE] 推送完成")
+    push(f"⚡ 异动 {now:%m-%d %H:%M}（{len(alerts)}只）", "\n".join(lines))
+    save_state(state)
+    print(f"[DONE] 推送 {len(alerts)} 条")
 
 
 if __name__ == "__main__":
