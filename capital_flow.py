@@ -1,5 +1,5 @@
 """
-聪明钱联动哨兵 v1.1（任务⑦）
+聪明钱联动哨兵 v1.2（任务⑦）
 功能：持仓股+买入候选的主力资金流向（聪明钱信号）
 数据源：Tushare moneyflow（个股资金流向）
 联动：聪明钱流入+接近触发价=强买点；聪明钱流出持仓=警示
@@ -17,8 +17,8 @@ FRAMEWORK_FILE = "framework_state.json"
 BATCH_SIZE = 20
 GAP_LIMIT = 10.0
 DAYS = 5
-INFLOW_TH = 3000
-OUTFLOW_TH = 3000
+INFLOW_TH = 0.3     # 亿元（原3000万）
+OUTFLOW_TH = 0.3    # 亿元（原3000万）
 EXCLUDE = {"002747"}   # 埃斯顿（负成本，已了结）
 
 
@@ -138,7 +138,7 @@ def main():
                                fields='ts_code,trade_date,net_mf_amount')
             if df is not None and not df.empty:
                 df = df.sort_values("trade_date").tail(DAYS)
-                net = df["net_mf_amount"].sum()
+                net = df["net_mf_amount"].sum() / 10000   # 万元 → 亿元
                 if net >= INFLOW_TH:
                     inflow.append((meta["name"], code, net, meta["is_hold"], meta["trigger"]))
                 elif net <= -OUTFLOW_TH:
@@ -164,7 +164,7 @@ def main():
         for name, code, net, is_hold, tp in inflow:
             tag = "持仓" if is_hold else "候选"
             trig = f" 触发{tp:.2f}" if tp > 0 else ""
-            lines.append(f"· {name}({code}) 净流入{net:+.0f}万 [{tag}]{trig}")
+            lines.append(f"· {name}({code}) 净流入{net:+.2f}亿 [{tag}]{trig}")
             lines.append("")
 
     if outflow:
@@ -172,7 +172,7 @@ def main():
         lines.append("")
         for name, code, net, is_hold, tp in outflow:
             tag = "持仓⚠" if is_hold else "候选"
-            lines.append(f"· {name}({code}) 净流出{net:+.0f}万 [{tag}]")
+            lines.append(f"· {name}({code}) 净流出{net:+.2f}亿 [{tag}]")
             lines.append("")
 
     if not inflow and not outflow:
