@@ -1,10 +1,10 @@
 """
-触发价总监控 v1.4（任务①）
+触发价总监控 v1.5（任务①）
 功能：已触发 + 买入候选（gap≤10%） + 距触发价排行
-数据源：framework_state.json（触发价/持仓） + 东财实时价
+数据源：framework_state.json（触发价/持仓） + 东财实时价（分批拉取）
 联动：PE/PB共振交给「估值共振」任务（Tushare），本任务只做gap
 运行：收盘后 15:45
-注意：东财f2返回"分"需÷100；PushPlus换行需每行之间空行
+注意：东财f2返回"分"需÷100；分批请求避免URL过长502
 """
 
 import os, json, time, requests
@@ -16,6 +16,7 @@ FRAMEWORK_FILE = "framework_state.json"
 
 GAP_CLOSE = 10.0   # 买入候选：gap ≤ 10%
 RANK_TOP = 10      # 距触发价排行前 N 名
+BATCH_SIZE = 20    # 每批请求的股票数
 
 
 def to_secid(code):
@@ -36,25 +37,35 @@ def load_framework():
 
 
 def fetch_prices(secids, retries=3):
-    """东财批量：只拉 f2 现价（PE/PB不可靠，不拉）"""
+    """东财批量拉价，分批请求避免URL过长502"""
     url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
-    params = {"secids": ",".join(secids), "fields": "f2,f12,f14"}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://quote.eastmoney.com/",
     }
-    for attempt in range(retries):
-        try:
-            r = requests.get(url, params=params, headers=headers, timeout=30)
-            r.raise_for_status()
-            data = r.json()
-            diff = data.get("data", {}).get("diff", [])
-            if diff:
-                return diff
-        except Exception as e:
-            print(f"  [东财] 第{attempt+1}次失败: {e}")
-        time.sleep(3)
-    return []
+    all_diff = []
+    for i in range(0, len(secids), BATCH_SIZE):
+        batch = secids[i:i + BATCH_SIZE]
+        batch_no = i // BATCH_SIZE + 1
+        ok = False
+        for attempt in range(retries):
+            try:
+                r = requests.get(url, params={"secids": ",".join(batch), "fields": "f2,f12,f14"},
+                                 headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                diff = data.get("data", {}).get("diff", [])
+                if diff:
+                    all_diff.extend(diff)
+                    ok = True
+                    break
+            except Exception as e:
+                print(f"  [东财] 第{batch_no}批 第{attempt+1}次失败: {e}")
+            time.sleep(3)
+        if not ok:
+            print(f"  [东财] 第{batch_no}批 重试{retries}次仍失败")
+        time.sleep(2)
+    return all_diff
 
 
 def push(title, content):
@@ -97,7 +108,7 @@ def main():
     secids = [to_secid(c["code"]) for c in candidates]
     quotes = fetch_prices(secids)
     if not quotes:
-        print("[SKIP] 行情为空（重试3次仍失败）")
+        print("[SKIP] 行情为空（所有批次均失败）")
         return
 
     quote_map = {}
@@ -131,9 +142,8 @@ def main():
 
     ranking.sort(key=lambda x: x["gap"])
 
-    print(f"  已触发 {len(hit)} | 买入候选 {len(close)}")
+    print(f"  已触发 {len(hit)} | 买入候选 {len(close)} | 拉价成功 {len(quote_map)}/{len(candidates)}")
 
-    # 推送（空行分隔，确保每只股票一行）
     lines = [
         f"## 📊 触发价总监控 {now:%m-%d %H:%M}",
         f"监控{len(candidates)}只 · 触发{len(hit)} · 买入候选{len(close)}",
