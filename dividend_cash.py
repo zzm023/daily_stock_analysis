@@ -1,5 +1,5 @@
 """
-股息收租 v1.0（任务⑤）
+股息收租 v1.1（任务⑤）
 功能：持仓股股息日历 + 年度收租现金流
 数据源：Tushare dividend（分红） + 东财现价
 运行：收盘后 17:00
@@ -14,7 +14,7 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 FRAMEWORK_FILE = "framework_state.json"
 BATCH_SIZE = 20
-EXCLUDE = {"002747"}   # 埃斯顿
+EXCLUDE = {"002747"}
 
 
 def to_tscode(code):
@@ -47,7 +47,6 @@ def fetch_prices(secids, retries=3):
     all_diff = []
     for i in range(0, len(secids), BATCH_SIZE):
         batch = secids[i:i + BATCH_SIZE]
-        batch_no = i // BATCH_SIZE + 1
         ok = False
         for attempt in range(retries):
             try:
@@ -61,10 +60,8 @@ def fetch_prices(secids, retries=3):
                     ok = True
                     break
             except Exception as e:
-                print(f"  [东财] 第{batch_no}批 第{attempt+1}次失败: {e}")
+                print(f"  [东财] 第{i // BATCH_SIZE + 1}批 第{attempt+1}次失败: {e}")
             time.sleep(3)
-        if not ok:
-            print(f"  [东财] 第{batch_no}批 重试{retries}次仍失败")
         time.sleep(2)
     return all_diff
 
@@ -108,7 +105,6 @@ def main():
         push(f"📊 股息收租 {now:%m-%d}", "## 股息收租\n\n无持仓。")
         return
 
-    # 拉现价
     secids = [to_secid(p["code"]) for p in positions]
     quotes = fetch_prices(secids)
     quote_map = {}
@@ -135,24 +131,28 @@ def main():
         ex_date = ""
         end_date = ""
         try:
-            df = pro.dividend(ts_code=tscode, fields='ts_code,end_date,ex_date,cash_div,div_proc')
+            df = pro.dividend(ts_code=tscode)
             if df is not None and not df.empty:
-                # 取最近一次已实施的分红
-                df = df[df["cash_div"].notna()].sort_values("end_date")
-                if not df.empty:
-                    row = df.iloc[-1]
-                    cash_div = float(row.get("cash_div", 0) or 0)
+                print(f"  {name} dividend原始{len(df)}行 列:{list(df.columns)}")
+                # 只取有现金分红（每股派息>0）的
+                df2 = df[df["cash_div"].notna() & (df["cash_div"] > 0)]
+                if not df2.empty:
+                    df2 = df2.sort_values("end_date")
+                    row = df2.iloc[-1]
+                    cash_div = float(row["cash_div"])
                     ex_date = str(row.get("ex_date", ""))[:10]
                     end_date = str(row.get("end_date", ""))[:4]
+                else:
+                    print(f"  {name} 无cash_div>0记录 原始值:{list(df['cash_div'].head())}")
         except Exception as e:
             print(f"  {name} 分红失败: {e}")
         time.sleep(0.3)
 
-        if cash_div is None:
+        if cash_div is None or cash_div <= 0:
             continue
 
-        income = cash_div * shares          # 到手股息（税前）
-        yield_pct = cash_div / price * 100 if price > 0 else 0   # 股息率
+        income = cash_div * shares
+        yield_pct = cash_div / price * 100 if price > 0 else 0
         total_income += income
 
         rows.append({
@@ -171,13 +171,17 @@ def main():
         "",
     ]
 
-    lines.append("**💰 收租明细（按到手金额排序）**")
-    lines.append("")
-    for r in rows:
-        lines.append(f"· {r['name']}({r['code']}) 每股{r['cash_div']:.2f}元 × {r['shares']}股 = {r['income']:.0f}元 股息率{r['yield_pct']:.1f}% 除息{r['ex_date']}")
+    if rows:
+        lines.append("**💰 收租明细（按到手金额排序）**")
+        lines.append("")
+        for r in rows:
+            ex = f" 除息{r['ex_date']}" if r["ex_date"] and r["ex_date"] != "nan" else ""
+            lines.append(f"· {r['name']}({r['code']}) 每股{r['cash_div']:.2f}元 × {r['shares']}股 = {r['income']:.0f}元 股息率{r['yield_pct']:.1f}%{ex}")
+            lines.append("")
+    else:
+        lines.append("⚠️ 暂无有效分红数据（见运行日志调试信息）")
         lines.append("")
 
-    lines.append(f"---")
     lines.append(f"💰 年度收租合计约 **{total_income:.0f} 元**（税前，未计持有期税率）")
     lines.append("")
     lines.append("⚠️ 收租是框架的底仓逻辑，股息是长期持有的保底现金流。")
