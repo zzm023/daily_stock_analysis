@@ -1,23 +1,28 @@
-name: 多信号共振
+name: 估值共振·PE/PB达标判断
 
 on:
   schedule:
-    - cron: '0 8 * * 1'
+    - cron: '0 8 * * 1-5'   # 收盘后 16:00 北京时间
   workflow_dispatch:
 
 jobs:
   signal-confluence:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install requests
-      - name: 多信号共振
-        env:
-          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-          PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+
+      - name: 安装依赖
+        run: pip install tushare requests
+
+      - name: 运行估值共振
         run: python signal_confluence.py
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
