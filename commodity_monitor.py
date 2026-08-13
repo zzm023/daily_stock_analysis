@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
-大宗商品价格监控 v1.2
-监控9个商品 → 8只框架股票
-周期：碳酸锂+MDI每天；其余每周一
+大宗商品价格监控 v1.3
+期货品种：碳酸锂(LC)、天然橡胶(RU) 每天/每周
+现货品种：生意社反爬，暂时降级（SPOT_ENABLE=False）
 
-数据源：
-  期货类: akshare futures_main_sina (碳酸锂LC, 天然橡胶RU)
-  现货类: 生意社100ppi.com 爬取 (MDI/钛白粉/蛋氨酸/EVA/水泥/氯化钾/动力煤)
+数据源：akshare futures_main_sina（期货主力）
 运行：每日 08:00
 """
 
 import requests
 import json
 import os
-import re
 from datetime import datetime, date
 from pathlib import Path
 
 # ============================================================
-# 配置：商品 → 对应股票 → 监控级别
+# 配置
 # ============================================================
 
+SPOT_ENABLE = False   # 生意社现货数据源维护中，暂时关闭
+
+# 期货品种（akshare 可用）
 COMMODITIES = {
     "碳酸锂": {
         "stocks": ["盐湖股份(000792)"],
@@ -30,62 +30,6 @@ COMMODITIES = {
         "source": "futures",
         "code": "LC",
     },
-    "聚合MDI": {
-        "stocks": ["万华化学(600309)"],
-        "level": "daily",
-        "unit": "元/吨",
-        "threshold": 0.02,
-        "source": "100ppi",
-        "ppid": "264",
-    },
-    "钛白粉(金红石型)": {
-        "stocks": ["龙佰集团(002601)"],
-        "level": "weekly",
-        "unit": "元/吨",
-        "threshold": 0.02,
-        "source": "100ppi",
-        "ppid": "764",
-    },
-    "蛋氨酸": {
-        "stocks": ["安迪苏(600299)"],
-        "level": "weekly",
-        "unit": "元/公斤",
-        "threshold": 0.03,
-        "source": "100ppi",
-        "ppid": "843",
-    },
-    "PO42.5水泥": {
-        "stocks": ["海螺水泥(600585)"],
-        "level": "weekly",
-        "unit": "元/吨",
-        "threshold": 0.02,
-        "source": "100ppi",
-        "ppid": "308",
-    },
-    "动力煤(5500大卡)": {
-        "stocks": ["海螺水泥(600585)", "兖矿能源(600188)"],
-        "level": "weekly",
-        "unit": "元/吨",
-        "threshold": 0.02,
-        "source": "100ppi",
-        "ppid": "345",
-    },
-    "氯化钾": {
-        "stocks": ["盐湖股份(000792)"],
-        "level": "weekly",
-        "unit": "元/吨",
-        "threshold": 0.03,
-        "source": "100ppi",
-        "ppid": "389",
-    },
-    "EVA光伏料": {
-        "stocks": ["福斯特(603806)"],
-        "level": "weekly",
-        "unit": "元/吨",
-        "threshold": 0.02,
-        "source": "100ppi",
-        "ppid": "1139",
-    },
     "天然橡胶": {
         "stocks": ["赛轮轮胎(601058)"],
         "level": "weekly",
@@ -94,6 +38,17 @@ COMMODITIES = {
         "source": "futures",
         "code": "RU",
     },
+}
+
+# 现货品种（生意社反爬，暂停；保留配置方便后续恢复）
+SPOT_COMMODITIES = {
+    "聚合MDI": {"stocks": ["万华化学(600309)"], "level": "daily", "unit": "元/吨", "threshold": 0.02, "ppid": "264"},
+    "钛白粉(金红石型)": {"stocks": ["龙佰集团(002601)"], "level": "weekly", "unit": "元/吨", "threshold": 0.02, "ppid": "764"},
+    "蛋氨酸": {"stocks": ["安迪苏(600299)"], "level": "weekly", "unit": "元/公斤", "threshold": 0.03, "ppid": "843"},
+    "PO42.5水泥": {"stocks": ["海螺水泥(600585)"], "level": "weekly", "unit": "元/吨", "threshold": 0.02, "ppid": "308"},
+    "动力煤(5500大卡)": {"stocks": ["海螺水泥(600585)", "兖矿能源(600188)"], "level": "weekly", "unit": "元/吨", "threshold": 0.02, "ppid": "345"},
+    "氯化钾": {"stocks": ["盐湖股份(000792)"], "level": "weekly", "unit": "元/吨", "threshold": 0.03, "ppid": "389"},
+    "EVA光伏料": {"stocks": ["福斯特(603806)"], "level": "weekly", "unit": "元/吨", "threshold": 0.02, "ppid": "1139"},
 }
 
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
@@ -118,45 +73,6 @@ def get_futures_price(code):
             }
     except Exception as e:
         print(f"  [akshare期货] {code} 获取失败: {e}")
-    return None
-
-
-def get_100ppi_price(ppid, name):
-    try:
-        url = f"https://www.100ppi.com/price/detail-{ppid}.html"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.encoding = "utf-8"
-        text = resp.text
-
-        patterns = [
-            r'<span[^>]*class="[^"]*price[^"]*"[^>]*>(\d+\.?\d*)</span>',
-            r'最新价格[：:]\s*(\d+\.?\d*)',
-            r'最新价[：:]\s*(\d+\.?\d*)',
-            r'参考价[：:]\s*(\d+\.?\d*)',
-            r'基准价[：:]\s*(\d+\.?\d*)',
-            r'"price"\s*:\s*"?(\d+\.?\d*)"?',
-            r'"latestPrice"\s*:\s*"?(\d+\.?\d*)"?',
-            r'<td[^>]*class="[^"]*price[^"]*"[^>]*>(\d+\.?\d*)</td>',
-        ]
-        for pat in patterns:
-            m = re.search(pat, text)
-            if m:
-                price = float(m.group(1))
-                return {"price": price, "date": str(date.today()), "change_pct": None}
-        print(f"  [100ppi] {name}({ppid}) 未匹配到价格（页面已抓取 {len(text)} 字符）")
-    except Exception as e:
-        print(f"  [100ppi] {name}({ppid}) 请求失败: {e}")
-    return None
-
-
-def get_commodity_price(name, cfg):
-    if cfg["source"] == "futures":
-        return get_futures_price(cfg["code"])
-    elif cfg["source"] == "100ppi":
-        return get_100ppi_price(cfg["ppid"], name)
     return None
 
 
@@ -230,7 +146,7 @@ def main():
             continue
 
         print(f"[{name}] 获取中...")
-        result = get_commodity_price(name, cfg)
+        result = get_futures_price(cfg["code"])
 
         if result is None:
             print(f"  获取失败，跳过")
@@ -297,7 +213,7 @@ def main():
             lines.append("")
 
     lines.append("---")
-    lines.append(f"⏰ {now:%Y-%m-%d %H:%M} | 监控9商品→8框架股")
+    lines.append(f"⏰ {now:%Y-%m-%d %H:%M} | 期货2品种 | 现货7品种维护中")
 
     title = "⚡ 商品告警" if alerts else "📋 商品周报"
     pushplus_send(title, "\n".join(lines))
