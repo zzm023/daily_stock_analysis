@@ -1,0 +1,28 @@
+name: 聪明钱哨兵·主力资金联动
+
+on:
+  schedule:
+    - cron: '30 9 * * 1-5'   # 收盘后 17:30 北京时间
+  workflow_dispatch:
+
+jobs:
+  capital-flow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install tushare requests
+
+      - name: 运行聪明钱哨兵
+        run: python capital_flow.py
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
