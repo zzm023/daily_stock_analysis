@@ -1,9 +1,9 @@
 """
-价格异动监控（盘中实时）v3.3
+价格异动监控（盘中实时）v3.4
 和触发价联动：持仓(±3%) + gap≤10%观察股(±5%)
-数据源：framework_state.json（触发价+持仓） + 东财实时价
+数据源：framework_state.json（触发价+持仓） + 东财实时价（分批拉取）
 涨跌幅 = (最新价f2 - 昨收f18) / 昨收f18，自算
-注意：东财f2/f18返回"分"，需÷100转元
+注意：东财f2/f18返回"分"需÷100；分批请求避免URL过长502
 """
 
 import os, json, time, requests
@@ -19,6 +19,7 @@ HOLD_THRESHOLD = 3.0    # 持仓 ±3%
 WATCH_THRESHOLD = 5.0   # 观察 ±5%
 GAP_LIMIT = 10.0        # 观察股 gap≤10% 才监控（%）
 LEVELS = [3.0, 5.0, 7.0, 9.0]
+BATCH_SIZE = 20         # 每批请求的股票数
 
 EXCLUDE = {"002747"}    # 埃斯顿（负成本，不监控）
 
@@ -49,25 +50,35 @@ def push(title, content):
 
 
 def fetch_quotes(secids, retries=3):
-    """东财批量：f2现价 f12代码 f14名称 f18昨收，带重试"""
+    """东财批量：f2现价 f12代码 f14名称 f18昨收，分批请求"""
     url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
-    params = {"secids": ",".join(secids), "fields": "f2,f12,f14,f18"}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://quote.eastmoney.com/",
     }
-    for attempt in range(retries):
-        try:
-            r = requests.get(url, params=params, headers=headers, timeout=30)
-            r.raise_for_status()
-            data = r.json()
-            diff = data.get("data", {}).get("diff", [])
-            if diff:
-                return diff
-        except Exception as e:
-            print(f"  [东财] 第{attempt+1}次失败: {e}")
-        time.sleep(3)
-    return []
+    all_diff = []
+    for i in range(0, len(secids), BATCH_SIZE):
+        batch = secids[i:i + BATCH_SIZE]
+        batch_no = i // BATCH_SIZE + 1
+        ok = False
+        for attempt in range(retries):
+            try:
+                r = requests.get(url, params={"secids": ",".join(batch), "fields": "f2,f12,f14,f18"},
+                                 headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                diff = data.get("data", {}).get("diff", [])
+                if diff:
+                    all_diff.extend(diff)
+                    ok = True
+                    break
+            except Exception as e:
+                print(f"  [东财] 第{batch_no}批 第{attempt+1}次失败: {e}")
+            time.sleep(3)
+        if not ok:
+            print(f"  [东财] 第{batch_no}批 重试{retries}次仍失败")
+        time.sleep(2)
+    return all_diff
 
 
 def load_state():
@@ -125,7 +136,7 @@ def main():
     secids = [to_secid(c) for c in candidates.keys()]
     quotes = fetch_quotes(secids)
     if not quotes:
-        print("[SKIP] 行情为空（重试3次仍失败）")
+        print("[SKIP] 行情为空（所有批次均失败）")
         return
 
     price_map = {}
@@ -195,8 +206,8 @@ def main():
         if not is_hold and tp > 0:
             gap_str = f"（距触发价{(price - tp) / tp * 100:.1f}%）"
         lines.append(f"{arrow} **{name}**({code}) [{tag}] 涨跌 **{change:+.2f}%**（≥{lv:.0f}%档）{gap_str}")
-    lines.append("")
-    lines.append(f"---\n盘中监控 {watch_count}只 · {now:%m-%d %H:%M}")
+        lines.append("")
+    lines.append(f"--- 盘中监控 {watch_count}只 · {now:%m-%d %H:%M}")
 
     push(f"⚡ 异动 {now:%m-%d %H:%M}（{len(alerts)}只）", "\n".join(lines))
     save_state(state)
