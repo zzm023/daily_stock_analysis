@@ -1,139 +1,186 @@
 """
-主力资金哨兵 v7
-交易时段取 f62 + 存历史自累5日 → 非交易时段读缓存
+聪明钱联动哨兵 v1.0（任务⑦）
+功能：持仓股+买入候选的主力资金流向（聪明钱信号）
+数据源：Tushare moneyflow（个股资金流向）
+联动：聪明钱流入+接近触发价=强买点；聪明钱流出持仓=警示
+运行：收盘后 17:30
 """
-import os, json, requests
-from datetime import datetime
-from pathlib import Path
 
-STATE_FILE = Path(__file__).parent / "framework_state.json"
+import os, json, time, requests
+from datetime import datetime, timedelta, timezone
+import tushare as ts
+
+TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
+FRAMEWORK_FILE = "framework_state.json"
+BATCH_SIZE = 20
+GAP_LIMIT = 10.0
+DAYS = 5            # 观察最近5个交易日
+INFLOW_TH = 3000    # 主力累计净流入阈值（万元）→ 关注
+OUTFLOW_TH = 3000   # 主力累计净流出阈值（万元）→ 警示
 
 
-def get_today_flow(code):
-    """东财单只 f62=主力净流入(元) → 返回元"""
-    prefix = "1" if code.startswith("6") else "0"
+def to_tscode(code):
+    if code.startswith(("6", "9")):
+        return code + ".SH"
+    return code + ".SZ"
+
+
+def to_secid(code):
+    if code.startswith(("6", "9")):
+        return "1." + code
+    return "0." + code
+
+
+def load_framework():
     try:
-        r = requests.get(
-            "https://push2.eastmoney.com/api/qt/stock/get",
-            params={"secid": f"{prefix}.{code}", "fields": "f43,f62,f64"},
-            timeout=10,
-            headers={"Referer": "https://quote.eastmoney.com/"}
-        )
-        d = r.json().get("data")
-        if not d or d.get("f62") is None:
-            return None
-        return {
-            "price": d.get("f43", 0) / 100 if d.get("f43") else 0,
-            "flow": d["f62"],  # 元
-            "pct": d.get("f64") or 0,
-        }
+        with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
     except:
-        return None
+        return {}, {}
+    trigger = data.get("trigger", {})
+    holdings = {k: v for k, v in data.get("holdings", {}).items() if k != "cash"}
+    return trigger, holdings
+
+
+def fetch_prices(secids, retries=3):
+    url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://quote.eastmoney.com/",
+    }
+    all_diff = []
+    for i in range(0, len(secids), BATCH_SIZE):
+        batch = secids[i:i + BATCH_SIZE]
+        ok = False
+        for attempt in range(retries):
+            try:
+                r = requests.get(url, params={"secids": ",".join(batch), "fields": "f2,f12,f14"},
+                                 headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                diff = data.get("data", {}).get("diff", [])
+                if diff:
+                    all_diff.extend(diff)
+                    ok = True
+                    break
+            except Exception as e:
+                print(f"  [东财] 第{i // BATCH_SIZE + 1}批 第{attempt+1}次失败: {e}")
+            time.sleep(3)
+        time.sleep(2)
+    return all_diff
 
 
 def push(title, content):
     if not PUSHPLUS_TOKEN:
         return
     try:
-        payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
-        if PUSHPLUS_TOPIC:
-            payload["topic"] = PUSHPLUS_TOPIC
-        requests.post("http://www.pushplus.plus/send", json=payload, timeout=10)
-    except:
-        pass
+        r = requests.post("http://www.pushplus.plus/send", json={
+            "token": PUSHPLUS_TOKEN, "title": title,
+            "content": content, "template": "markdown",
+            "topic": PUSHPLUS_TOPIC,
+        }, timeout=10)
+        print(f"  [Push] {'OK' if r.json().get('code') == 200 else r.json()}")
+    except Exception as e:
+        print(f"  [Push] {e}")
 
 
 def main():
-    now = datetime.now()
-    today = now.strftime("%Y-%m-%d")
-    print(f"[START] 主力资金哨兵 v7 {today}")
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    print(f"[START] 聪明钱哨兵 {now:%m-%d %H:%M}")
 
-    with open(STATE_FILE, "r") as f:
-        state = json.load(f)
+    if not TUSHARE_TOKEN:
+        print("[SKIP] 未配置 TUSHARE_TOKEN")
+        return
 
-    hold = state.get("holdings", {})
-    trigger = state.get("trigger", {})
+    pro = ts.pro_api(TUSHARE_TOKEN)
+    trigger, holdings = load_framework()
 
-    held = {c for c in hold if c != "cash" and isinstance(hold.get(c), dict)}
-    triggered = {c for c, t in trigger.items() if isinstance(t, dict) and t.get("status") == "已触发"}
-    codes = sorted(held | triggered)
+    # 监控范围：持仓股 + gap≤10%的候选
+    targets = {}
+    for code, info in holdings.items():
+        targets[code] = {"name": info.get("name", code), "is_hold": True, "trigger": trigger.get(code, {}).get("trigger_price", 0) or 0}
 
-    flow_hist = state.setdefault("flow_history", {})
-    new_data = 0
+    secids = [to_secid(c) for c in targets.keys()]
+    quotes = fetch_prices(secids)
+    quote_map = {}
+    for q in quotes:
+        code = q.get("f12", "")
+        try:
+            price = float(q.get("f2", 0)) / 100
+        except:
+            price = 0
+        if code:
+            quote_map[code] = price
+
+    for code, info in trigger.items():
+        tp = info.get("trigger_price", 0) or 0
+        if tp <= 0 or code in targets:
+            continue
+        price = quote_map.get(code, 0)
+        if price > 0 and (price - tp) / tp * 100 <= GAP_LIMIT:
+            targets[code] = {"name": info.get("name", code), "is_hold": False, "trigger": tp}
+
+    # 拉 moneyflow（最近5个交易日）
+    end = (now - timedelta(days=1)).strftime("%Y%m%d")
+    start = (now - timedelta(days=DAYS + 15)).strftime("%Y%m%d")
 
     inflow = []
     outflow = []
-    no_update = []
 
-    for code in codes:
-        if code in hold and isinstance(hold.get(code), dict):
-            name = hold[code].get("name", code)
-        else:
-            name = trigger.get(code, {}).get("name", code) if isinstance(trigger.get(code), dict) else code
-        tag = "持仓" if code in held else "触发"
-
-        # 取今日
-        d = get_today_flow(code)
-        hist = flow_hist.get(code, [])
-
-        if d and d["flow"] is not None:
-            # 去重：同日不重复存
-            if not hist or hist[-1].get("date") != today:
-                hist.append({"date": today, "flow": d["flow"]})
-                new_data += 1
-            flow_hist[code] = hist[-10:]  # 保留最近10天
-        else:
-            no_update.append(f"{name}({tag})")
-
-        # 算5日累计（用最近5条）
-        recent = hist[-5:]
-        flow_5d = sum(h["flow"] for h in recent)
-
-        if flow_5d > 0:
-            inflow.append((name, tag, flow_5d, d["flow"] if d else 0, d["pct"] if d else 0))
-        else:
-            outflow.append((name, tag, flow_5d, d["flow"] if d else 0, d["pct"] if d else 0))
-
-    # 保存
-    state["flow_history"] = flow_hist
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    for code, meta in targets.items():
+        tscode = to_tscode(code)
+        try:
+            df = pro.moneyflow(ts_code=tscode, start_date=start, end_date=end,
+                               fields='ts_code,trade_date,net_mf_amount')
+            if df is not None and not df.empty:
+                df = df.sort_values("trade_date").tail(DAYS)
+                net = df["net_mf_amount"].sum()   # 万元
+                if net >= INFLOW_TH:
+                    inflow.append((meta["name"], code, net, meta["is_hold"], meta["trigger"]))
+                elif net <= -OUTFLOW_TH:
+                    outflow.append((meta["name"], code, net, meta["is_hold"], meta["trigger"]))
+        except Exception as e:
+            print(f"  {meta['name']} 资金流失败: {e}")
+        time.sleep(0.3)
 
     inflow.sort(key=lambda x: -x[2])
     outflow.sort(key=lambda x: x[2])
 
+    print(f"  流入 {len(inflow)} | 流出 {len(outflow)}")
+
     lines = [
-        f"主力资金哨兵 {now:%m}.{now:%d}",
-        f"持仓+已触发 {len(codes)}只 | 今日新取{new_data}只",
+        f"## 📊 聪明钱哨兵 {now:%m-%d %H:%M}",
+        f"监控{len(targets)}只 · 主力流入{len(inflow)} · 主力流出{len(outflow)}（近{DAYS}日）",
+        "",
     ]
 
     if inflow:
+        lines.append("**🟢 主力资金净流入（聪明钱在买）**")
         lines.append("")
-        lines.append(f"5日净流入 {len(inflow)}只")
-        for name, tag, f5, f1, pct in inflow:
-            star = "🔥" if f5 > 100000000 else ""
-            val5 = f5 / 100000000
-            val1 = f1 / 100000000
-            lines.append(f"  - {star}{name}[{tag}] 5日{val5:+.1f}亿 今日{val1:+.2f}亿 占比{pct:.1f}%")
+        for name, code, net, is_hold, tp in inflow:
+            tag = "持仓" if is_hold else "候选"
+            trig = f" 触发{tp:.2f}" if tp > 0 else ""
+            lines.append(f"· {name}({code}) 净流入{net:+.0f}万 [{tag}]{trig}")
+            lines.append("")
 
     if outflow:
+        lines.append("**🔴 主力资金净流出（聪明钱在卖）**")
         lines.append("")
-        lines.append(f"5日净流出 {len(outflow)}只")
-        for name, tag, f5, f1, pct in outflow:
-            val5 = f5 / 100000000
-            lines.append(f"  - {name}[{tag}] 5日{val5:.1f}亿")
+        for name, code, net, is_hold, tp in outflow:
+            tag = "持仓⚠" if is_hold else "候选"
+            lines.append(f"· {name}({code}) 净流出{net:+.0f}万 [{tag}]")
+            lines.append("")
 
-    if no_update:
+    if not inflow and not outflow:
+        lines.append("暂无主力资金异常信号。")
         lines.append("")
-        lines.append(f"今日无新数据 {len(no_update)}只（非交易时段正常）")
 
-    lines.append("")
-    lines.append(f"> 东财 f62 | 15:30后跑有数据 | 缓存自累5日")
+    lines.append("⚠️ 聪明钱信号是博弈参考，不是买卖依据。收租底仓为主，主力资金仅作情绪联动。")
 
-    push(f"主力资金哨兵 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE] 新取{new_data} 流入{len(inflow)} 流出{len(outflow)}")
+    push(f"📊 聪明钱哨兵（流入{len(inflow)}/流出{len(outflow)}）", "\n".join(lines))
+    print("[DONE] 推送完成")
 
 
 if __name__ == "__main__":
