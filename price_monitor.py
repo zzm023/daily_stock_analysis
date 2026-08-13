@@ -1,10 +1,10 @@
 """
-触发价总监控 v1.2（任务①）
-功能：已触发 + 即将触发 + 买入清单 + 距触发价排行
-数据源：framework_state.json（触发价/PE/PB锚点/持仓） + 东财实时价(收盘价)
-联动：买入清单 = gap≤10% + PE≤pe_upper + PB≤pb_lower（锚点严格取框架，不猜测）
+触发价总监控 v1.4（任务①）
+功能：已触发 + 买入候选（gap≤10%） + 距触发价排行
+数据源：framework_state.json（触发价/持仓） + 东财实时价
+联动：PE/PB共振交给「估值共振」任务（Tushare），本任务只做gap
 运行：收盘后 15:45
-注意：东财f2返回"分"，需÷100转元；推送用列表格式一行一只
+注意：东财f2返回"分"需÷100；PushPlus换行需每行之间空行
 """
 
 import os, json, time, requests
@@ -14,7 +14,7 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 FRAMEWORK_FILE = "framework_state.json"
 
-GAP_CLOSE = 10.0   # 即将触发：gap ≤ 10%
+GAP_CLOSE = 10.0   # 买入候选：gap ≤ 10%
 RANK_TOP = 10      # 距触发价排行前 N 名
 
 
@@ -36,9 +36,9 @@ def load_framework():
 
 
 def fetch_prices(secids, retries=3):
-    """东财批量：f2现价 f9市盈率 f23市净率，带重试"""
+    """东财批量：只拉 f2 现价（PE/PB不可靠，不拉）"""
     url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
-    params = {"secids": ",".join(secids), "fields": "f2,f9,f12,f14,f23"}
+    params = {"secids": ",".join(secids), "fields": "f2,f12,f14"}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://quote.eastmoney.com/",
@@ -87,8 +87,6 @@ def main():
             "code": code,
             "name": info.get("name", code),
             "trigger": tp,
-            "pe_upper": info.get("pe_upper", 0) or 0,
-            "pb_lower": info.get("pb_lower", 0) or 0,
             "is_hold": code in hold_codes,
         })
 
@@ -107,81 +105,66 @@ def main():
         code = q.get("f12", "")
         try:
             price = float(q.get("f2", 0)) / 100   # 分 → 元
-            pe = float(q.get("f9", 0))
-            pb = float(q.get("f23", 0))
         except:
-            price = pe = pb = 0
+            price = 0
         if code:
-            quote_map[code] = {"price": price, "pe": pe, "pb": pb}
+            quote_map[code] = price
 
-    hit = []
-    close = []
-    buy = []
-    ranking = []
+    hit = []     # 已触发：现价 ≤ 触发价
+    close = []   # 买入候选：gap ≤ 10%
+    ranking = [] # 距触发价排行
 
     for c in candidates:
         code = c["code"]
-        q = quote_map.get(code)
-        if q is None:
-            continue
-        price = q["price"]
-        if price <= 0:
+        price = quote_map.get(code)
+        if price is None or price <= 0:
             continue
 
         gap = (price - c["trigger"]) / c["trigger"] * 100
-        row = {**c, "price": price, "gap": gap, "pe": q["pe"], "pb": q["pb"]}
+        row = {**c, "price": price, "gap": gap}
         ranking.append(row)
 
         if price <= c["trigger"]:
             hit.append(row)
         elif gap <= GAP_CLOSE:
             close.append(row)
-            if c["pe_upper"] > 0 and c["pb_lower"] > 0 and q["pe"] > 0 and q["pb"] > 0:
-                if q["pe"] <= c["pe_upper"] and q["pb"] <= c["pb_lower"]:
-                    buy.append(row)
 
     ranking.sort(key=lambda x: x["gap"])
 
-    print(f"  已触发 {len(hit)} | 临近 {len(close)} | 买入清单 {len(buy)}")
+    print(f"  已触发 {len(hit)} | 买入候选 {len(close)}")
 
-    # 推送（列表格式，一行一只）
+    # 推送（空行分隔，确保每只股票一行）
     lines = [
         f"## 📊 触发价总监控 {now:%m-%d %H:%M}",
-        f"监控{len(candidates)}只 · 触发{len(hit)} · 临近{len(close)} · 可买{len(buy)}",
+        f"监控{len(candidates)}只 · 触发{len(hit)} · 买入候选{len(close)}",
         "",
     ]
 
     if hit:
         lines.append("**🔥 已触发（现价≤触发价）**")
+        lines.append("")
         for r in hit:
             tag = "｜补仓" if r["is_hold"] else "｜待买"
             lines.append(f"· {r['name']}({r['code']}) {r['price']:.2f}→{r['trigger']:.2f} 距{r['gap']:+.1f}%{tag}")
-        lines.append("")
-
-    if buy:
-        lines.append("**🎯 买入清单（gap≤10%+PE/PB达标）**")
-        for r in buy:
-            lines.append(f"· {r['name']}({r['code']}) {r['price']:.2f}→{r['trigger']:.2f} PE{r['pe']:.1f} PB{r['pb']:.2f}")
-        lines.append("")
+            lines.append("")
 
     if close:
-        lines.append("**⏳ 即将触发（未达估值）**")
-        buy_codes = {b["code"] for b in buy}
-        for r in close:
-            if r["code"] in buy_codes:
-                continue
-            lines.append(f"· {r['name']}({r['code']}) {r['price']:.2f}→{r['trigger']:.2f} PE{r['pe']:.1f} PB{r['pb']:.2f}")
+        lines.append("**🎯 买入候选（距触发≤10%，估值待共振确认）**")
         lines.append("")
+        for r in close:
+            lines.append(f"· {r['name']}({r['code']}) {r['price']:.2f}→{r['trigger']:.2f} 距{r['gap']:+.1f}%")
+            lines.append("")
 
     if ranking:
         lines.append(f"**📉 距触发价排行（前{RANK_TOP}）**")
+        lines.append("")
         for i, r in enumerate(ranking[:RANK_TOP], 1):
             lines.append(f"{i}. {r['name']} {r['price']:.2f}→{r['trigger']:.2f}（{r['gap']:+.1f}%）")
-        lines.append("")
+            lines.append("")
 
-    lines.append("⚠️ 触发≠立即买。左侧分层：目标价打9折、仓位减半、观察1周。")
+    lines.append("⚠️ 买入候选仅看价格gap，PE/PB共振由「估值共振」任务确认。触发≠立即买，目标价打9折、仓位减半、观察1周。")
 
-    push(f"📊 触发价总监控（{len(hit)}触发/{len(buy)}可买）", "\n".join(lines))
+    push(f"📊 触发价总监控（{len(hit)}触发/{len(close)}候选）", "\n".join(lines))
     print("[DONE] 推送完成")
 
 
