@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-每周复盘 v3.1：PE / PB / 距触发价汇总
+每周复盘 v3.2：PE / PB / 距触发价汇总
 联动 framework_state.json：读触发价 + 动态股票清单
 数据源：Tushare daily_basic（PE/PB/收盘价）— 每周六 18:00
 """
@@ -74,7 +74,12 @@ def get_latest_trade_date(pro, now):
         df = pro.trade_cal(exchange="SSE", start_date=start, end_date=end,
                            is_open="1")
         if df is not None and not df.empty:
-            return str(df["cal_date"].max())
+            days = sorted(str(d) for d in df["cal_date"].tolist())
+            # 早于 17:00 跑，当天数据未生成，回退到上一个交易日
+            today = now.strftime("%Y%m%d")
+            if now.hour < 17:
+                days = [d for d in days if d < today]
+            return days[-1] if days else None
     except Exception as e:
         print(f"  [trade_cal] {e}")
     return None
@@ -124,7 +129,7 @@ def push(title, content):
 
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 每周复盘 v3.1 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 每周复盘 v3.2 {now:%Y-%m-%d %H:%M}")
 
     if not TUSHARE_TOKEN:
         print("[SKIP] 未配置 TUSHARE_TOKEN")
