@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-每周复盘 v3.2：PE / PB / 距触发价汇总
+每周复盘 v3.3：PE / PB / 距触发价汇总
 联动 framework_state.json：读触发价 + 动态股票清单
 数据源：Tushare daily_basic（PE/PB/收盘价）— 每周六 18:00
 """
@@ -75,7 +75,6 @@ def get_latest_trade_date(pro, now):
                            is_open="1")
         if df is not None and not df.empty:
             days = sorted(str(d) for d in df["cal_date"].tolist())
-            # 早于 17:00 跑，当天数据未生成，回退到上一个交易日
             today = now.strftime("%Y%m%d")
             if now.hour < 17:
                 days = [d for d in days if d < today]
@@ -86,27 +85,33 @@ def get_latest_trade_date(pro, now):
 
 
 def fetch_quotes(pro, codes, latest_td):
+    """ts_code 和 trade_date 二选一，用 ts_code + start/end_date，取最新一条"""
     lookup = {}
     ts_codes = ",".join(to_ts_code(c) for c in codes)
+    start = (datetime.strptime(latest_td, "%Y%m%d") - timedelta(days=10)).strftime("%Y%m%d")
     try:
-        df = pro.daily_basic(ts_code=ts_codes, trade_date=latest_td,
-                             fields="ts_code,close,pe,pb")
+        df = pro.daily_basic(ts_code=ts_codes, start_date=start, end_date=latest_td,
+                             fields="ts_code,trade_date,close,pe,pb")
         if df is not None and not df.empty:
-            for _, row in df.iterrows():
-                code = str(row["ts_code"]).split(".")[0]
-                try:
-                    close = float(row["close"]) if row["close"] else 0
-                except:
-                    close = 0
-                try:
-                    pe = float(row["pe"]) if row["pe"] else 0
-                except:
-                    pe = 0
-                try:
-                    pb = float(row["pb"]) if row["pb"] else 0
-                except:
-                    pb = 0
-                lookup[code] = {"price": close, "pe": pe, "pb": pb}
+            df = df.sort_values("trade_date")
+            for code in codes:
+                tsc = to_ts_code(code)
+                sub = df[df["ts_code"] == tsc]
+                if not sub.empty:
+                    row = sub.iloc[-1]
+                    try:
+                        price = float(row["close"]) if row["close"] else 0
+                    except:
+                        price = 0
+                    try:
+                        pe = float(row["pe"]) if row["pe"] else 0
+                    except:
+                        pe = 0
+                    try:
+                        pb = float(row["pb"]) if row["pb"] else 0
+                    except:
+                        pb = 0
+                    lookup[code] = {"price": price, "pe": pe, "pb": pb}
     except Exception as e:
         print(f"  [daily_basic] {e}")
     return lookup
@@ -129,7 +134,7 @@ def push(title, content):
 
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 每周复盘 v3.2 {now:%Y-%m-%d %H:%M}")
+    print(f"[START] 每周复盘 v3.3 {now:%Y-%m-%d %H:%M}")
 
     if not TUSHARE_TOKEN:
         print("[SKIP] 未配置 TUSHARE_TOKEN")
