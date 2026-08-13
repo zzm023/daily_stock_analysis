@@ -1,13 +1,13 @@
 """
-全市场扫描器 v7.1
+全市场扫描器 v7.2
 每周一从 CSI 300 + CSI 500 中按六类框架筛选候选 → PushPlus
 - daily_basic 用全市场单日查询（不支持 ts_code 批量）
 - fina_indicator 用 ts_code 批量（每批100个）
 - 用 trade_cal 动态探测最近交易日
-- 排除已在框架中的 52 只
-- v7.1：排除保险股（PE假便宜，需PEV估值，本扫描器不处理）
+- 排除已在框架中的 52 只 + 保险股
+- v7.2：修复时间边界（早于17:00跑回退到上一个交易日，避免当天数据未生成导致0命中）
 
-运行状态：✅ 已跑通（2026-08-12 命中10只）
+运行状态：✅ 已跑通
 """
 
 import os, json, requests
@@ -121,12 +121,19 @@ def get_latest_trade_date(now):
         if row[fc["is_open"]] == 1:
             open_days.append(row[fc["cal_date"]])
     open_days.sort()
+
+    # 数据更新边界：daily_basic 收盘后才更新
+    # 早于 17:00 跑，当天估值数据未生成，回退到上一个开盘日
+    today = now.strftime("%Y%m%d")
+    if now.hour < 17:
+        open_days = [d for d in open_days if d < today]
+
     return open_days[-1] if open_days else None
 
 
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 全市场扫描 v7.1 {now:%Y-%m-%d}")
+    print(f"[START] 全市场扫描 v7.2 {now:%Y-%m-%d}")
 
     latest_td = get_latest_trade_date(now)
     print(f"  [0] 最近交易日: {latest_td}")
@@ -222,7 +229,7 @@ def main():
 
         ind = s.get("industry", "")
         if ind == "保险":
-            continue   # 保险股PE假便宜，需PEV估值，本扫描器不处理
+            continue
 
         pe = s.get("pe")
         pb = s.get("pb")
