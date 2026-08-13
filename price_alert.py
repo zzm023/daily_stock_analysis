@@ -1,11 +1,11 @@
 """
-价格异动监控（盘中实时）v3.1
+价格异动监控（盘中实时）v3.2
 和触发价联动：持仓(±3%) + gap≤10%观察股(±5%)
 数据源：framework_state.json（触发价+持仓） + 东财实时价
 涨跌幅 = (最新价f2 - 昨收f18) / 昨收f18，自算不依赖f3
 """
 
-import os, json, requests
+import os, json, time, requests
 from datetime import datetime, timedelta, timezone
 
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
@@ -48,23 +48,26 @@ def push(title, content):
         print(f"  [Push] {e}")
 
 
-def fetch_quotes(secids):
+def fetch_quotes(secids, retries=3):
+    """东财批量：f2现价 f12代码 f14名称 f18昨收，带重试"""
     url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
     params = {"secids": ",".join(secids), "fields": "f2,f12,f14,f18"}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://quote.eastmoney.com/",
     }
-    r = None
-    try:
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        return data.get("data", {}).get("diff", [])
-    except Exception as e:
-        snippet = repr(r.text[:200]) if r is not None else ""
-        print(f"  [东财] {e} | 响应: {snippet}")
-        return []
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            diff = data.get("data", {}).get("diff", [])
+            if diff:
+                return diff
+        except Exception as e:
+            print(f"  [东财] 第{attempt+1}次失败: {e}")
+        time.sleep(3)
+    return []
 
 
 def load_state():
@@ -121,11 +124,10 @@ def main():
         print("[SKIP] 无候选")
         return
 
-    # 拉实时价
     secids = [to_secid(c) for c in candidates.keys()]
     quotes = fetch_quotes(secids)
     if not quotes:
-        print("[SKIP] 行情为空")
+        print("[SKIP] 行情为空（重试3次仍失败）")
         return
 
     price_map = {}
@@ -162,7 +164,7 @@ def main():
                 continue
             gap = (price - tp) / tp * 100
             if gap > GAP_LIMIT:
-                continue          # 远离触发价，不监控
+                continue
             threshold = WATCH_THRESHOLD
             watch_count += 1
 
