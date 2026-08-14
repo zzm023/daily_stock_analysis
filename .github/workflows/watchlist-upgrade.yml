@@ -2,7 +2,7 @@ name: 观察清单升级
 
 on:
   schedule:
-    - cron: '0 8 * * 1'
+    - cron: '0 8 * * 3'
   workflow_dispatch:
 
 jobs:
