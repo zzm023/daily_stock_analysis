@@ -1,8 +1,8 @@
-name: 周一汇总
+name: 周度汇总
 
 on:
   schedule:
-    - cron: '30 8 * * 1'
+    - cron: '30 8 * * 5'
   workflow_dispatch:
 
 jobs:
