@@ -1,5 +1,6 @@
 """
-框架状态校准 v4 — 只更新DPS，不覆盖触发价
+框架状态校准 v5 — 只更新DPS，不覆盖触发价
+修复：DPS按年度累加（中期+年末），不再过滤中期分红
 触发价是多重共振锚点，自动化无权改
 """
 import os, json, requests, time
@@ -65,8 +66,9 @@ def fetch_eps_latest(codes):
 
 
 def fetch_dps_map(codes):
-    """同一年多条求和"""
+    """按分红年度累加（中期+年末），取最近完整年度"""
     result = {}
+    current_year = datetime.now().year
     for i, code in enumerate(codes):
         ts = _to_ts(code)
         rows = tushare_call("dividend", {"ts_code": ts},
@@ -77,23 +79,25 @@ def fetch_dps_map(codes):
         for row in rows:
             cash_div = row[1]
             ed = str(int(row[2]))
-            if not cash_div or not ed.endswith("1231"):
+            if not cash_div:
                 continue
             val = float(cash_div)
             if val <= 0:
                 continue
             year = ed[:4]
             year_total[year] = year_total.get(year, 0) + val
-        if year_total:
-            best_year = max(year_total.keys())
-            result[code] = round(year_total[best_year], 3)
+        # 只取"过去年度"（当前年度可能只分了中期，未完整）
+        valid = {y: t for y, t in year_total.items() if int(y) < current_year}
+        if valid:
+            best_year = max(valid.keys())
+            result[code] = round(valid[best_year], 3)
         time.sleep(0.15)
     return result
 
 
 def main():
     now = datetime.now()
-    print(f"[START] 校准 v4 {now:%Y-%m-%d}")
+    print(f"[START] 校准 v5 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -125,7 +129,7 @@ def main():
             pe_implied_price = round(pe_upper * eps, 2)
             drift_pct = (pe_implied_price - trigger_price) / trigger_price * 100
 
-            if abs(drift_pct) > 5:  # 偏离超5%才报告
+            if abs(drift_pct) > 5:
                 drifts.append({
                     "name": t["name"], "code": code,
                     "trigger": trigger_price,
@@ -134,13 +138,11 @@ def main():
                     "pe": pe_upper, "eps": eps,
                 })
 
-    # ── 只写 DPS，不写触发价 ──
     state["meta"]["updated"] = now.isoformat()
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-    # ── 推送 ──
-    lines = [f"## 🔧 校准 v4 {now:%m.%d}", "",
+    lines = [f"## 🔧 校准 v5 {now:%m.%d}", "",
              f"> ⚠️ 仅更新DPS，触发价不动。偏离>5%的请手动复核。", "",
              f"✅ DPS更新 {dps_updates}只 | 📡 PE偏离>5% {len(drifts)}只", ""]
 
@@ -156,7 +158,7 @@ def main():
         if len(drifts) > 15:
             lines.append(f"| ... | | | +{len(drifts)-15}只 | |")
 
-    push(f"🔧 校准v4 {now:%m.%d}", "\n".join(lines))
+    push(f"🔧 校准v5 {now:%m.%d}", "\n".join(lines))
     print(f"[DONE] DPS{dps_updates}只 | 偏离{len(drifts)}只")
 
 
