@@ -1,6 +1,6 @@
 """
-框架状态校准 v5.2 — 只更新DPS，不覆盖触发价
-修复：DPS按年度累加（中期+年末）+ 推送块状格式（手机友好）
+框架状态校准 v5.3 — 只更新DPS，不覆盖触发价
+修复：DPS按年度累加（中期+年末）+ 🔻偏高单独提醒
 触发价是多重共振锚点，自动化无权改
 """
 import os, json, requests, time
@@ -99,7 +99,7 @@ def fetch_dps_map(codes):
 
 def main():
     now = datetime.now()
-    print(f"[START] 校准 v5.2 {now:%Y-%m-%d}")
+    print(f"[START] 校准 v5.3 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -142,29 +142,39 @@ def main():
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-    # ── 块状推送格式（手机友好）──
-    lines = [f"## 🔧 校准 {now:%m.%d}", "",
-             f"> 仅更新DPS，触发价不动。偏离>5%请手动复核", "",
-             f"✅ DPS更新 {dps_updates}只 ｜ 📡 PE偏离>5% {len(drifts)}只", ""]
+    # ── 分离 🔻偏高 / 🔺保守 ──
+    high = [d for d in drifts if d["drift"] < 0]   # 触发价 > 隐含价（偏高）
+    low = [d for d in drifts if d["drift"] >= 0]   # 触发价 < 隐含价（保守）
+    high.sort(key=lambda x: x["drift"])            # 偏高最多的排前
+    low.sort(key=lambda x: -x["drift"])            # 保守最多的排前
 
-    if drifts:
-        drifts.sort(key=lambda x: abs(x["drift"]), reverse=True)
-        lines.append("### ⚠️ PE隐含价偏离（仅报告）")
+    lines = [f"## 🔧 校准 {now:%m.%d}", "",
+             f"> 仅更新DPS，触发价不动。隐含价=PE上限×EPS（分属性设定）", "",
+             f"✅ DPS更新 {dps_updates}只 ｜ ⚠️偏高 {len(high)} ｜ 🔺保守 {len(low)}", ""]
+
+    if high:
+        lines.append(f"### ⚠️ 触发价偏高（{len(high)}只，建议复核）")
         lines.append("")
-        for d in drifts[:15]:
-            arrow = "🔺" if d["drift"] > 0 else "🔻"
-            lines.append(f"**{d['name']}** {arrow}{abs(d['drift']):.0f}%")
+        for d in high[:10]:
+            lines.append(f"**{d['name']}** 🔻{abs(d['drift']):.0f}%")
             lines.append(f"> 触发 {d['trigger']:.2f} → 隐含 {d['pe_price']:.2f}（PE{d['pe']}×EPS{d['eps']:.2f}）")
             lines.append("")
-        if len(drifts) > 15:
-            lines.append(f"> 其余 {len(drifts)-15} 只略")
+        if len(high) > 10:
+            lines.append(f"> 其余 {len(high)-10} 只略")
             lines.append("")
-    else:
-        lines.append("无 PE 偏离超 5% 的标的 ✅")
+
+    if low:
+        lines.append(f"### ✅ 触发价保守（{len(low)}只，正常）")
         lines.append("")
+        for d in low[:5]:
+            lines.append(f"· {d['name']} 🔺{d['drift']:.0f}%")
+            lines.append("")
+        if len(low) > 5:
+            lines.append(f"> 其余 {len(low)-5} 只略")
+            lines.append("")
 
     push(f"🔧 校准 {now:%m.%d}", "\n".join(lines))
-    print(f"[DONE] DPS{dps_updates}只 | 偏离{len(drifts)}只")
+    print(f"[DONE] DPS{dps_updates}只 | 偏高{len(high)} 保守{len(low)}")
 
 
 if __name__ == "__main__":
