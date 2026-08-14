@@ -1,6 +1,6 @@
 """
-框架状态校准 v5.3 — 只更新DPS，不覆盖触发价
-修复：DPS按年度累加（中期+年末）+ 🔻偏高单独提醒
+框架状态校准 v5.4 — 只更新DPS，不覆盖触发价
+修复：DPS按年度累加（中期+年末）+ 🔻分两档（🔥重点≥2倍 / ⚠️偏高）
 触发价是多重共振锚点，自动化无权改
 """
 import os, json, requests, time
@@ -11,6 +11,8 @@ STATE_FILE = Path(__file__).parent / "framework_state.json"
 TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
+
+CRITICAL = 50.0  # 🔥重点阈值：偏离≥50%（触发价≥2倍隐含价）
 
 
 def _to_ts(code):
@@ -99,7 +101,7 @@ def fetch_dps_map(codes):
 
 def main():
     now = datetime.now()
-    print(f"[START] 校准 v5.3 {now:%Y-%m-%d}")
+    print(f"[START] 校准 v5.4 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -142,25 +144,38 @@ def main():
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-    # ── 分离 🔻偏高 / 🔺保守 ──
-    high = [d for d in drifts if d["drift"] < 0]   # 触发价 > 隐含价（偏高）
-    low = [d for d in drifts if d["drift"] >= 0]   # 触发价 < 隐含价（保守）
-    high.sort(key=lambda x: x["drift"])            # 偏高最多的排前
-    low.sort(key=lambda x: -x["drift"])            # 保守最多的排前
+    # ── 分三档 ──
+    high = [d for d in drifts if d["drift"] < 0]   # 触发价偏高
+    low = [d for d in drifts if d["drift"] >= 0]   # 触发价保守
+    high.sort(key=lambda x: x["drift"])
+    low.sort(key=lambda x: -x["drift"])
+
+    critical = [d for d in high if abs(d["drift"]) >= CRITICAL]  # 🔥 贵一倍以上
+    warn = [d for d in high if abs(d["drift"]) < CRITICAL]       # ⚠️ 偏高但<2倍
 
     lines = [f"## 🔧 校准 {now:%m.%d}", "",
              f"> 仅更新DPS，触发价不动。隐含价=PE上限×EPS（分属性设定）", "",
-             f"✅ DPS更新 {dps_updates}只 ｜ ⚠️偏高 {len(high)} ｜ 🔺保守 {len(low)}", ""]
+             f"✅ DPS更新 {dps_updates}只 ｜ 🔥重点 {len(critical)} ｜ ⚠️偏高 {len(warn)} ｜ 🔺保守 {len(low)}", ""]
 
-    if high:
-        lines.append(f"### ⚠️ 触发价偏高（{len(high)}只，建议复核）")
+    if critical:
+        lines.append(f"### 🔥 重点复核（触发价≥2倍隐含价，{len(critical)}只）")
         lines.append("")
-        for d in high[:10]:
+        for d in critical[:10]:
             lines.append(f"**{d['name']}** 🔻{abs(d['drift']):.0f}%")
             lines.append(f"> 触发 {d['trigger']:.2f} → 隐含 {d['pe_price']:.2f}（PE{d['pe']}×EPS{d['eps']:.2f}）")
             lines.append("")
-        if len(high) > 10:
-            lines.append(f"> 其余 {len(high)-10} 只略")
+        if len(critical) > 10:
+            lines.append(f"> 其余 {len(critical)-10} 只略")
+            lines.append("")
+
+    if warn:
+        lines.append(f"### ⚠️ 触发价偏高（{len(warn)}只）")
+        lines.append("")
+        for d in warn[:8]:
+            lines.append(f"· {d['name']} 🔻{abs(d['drift']):.0f}%")
+            lines.append("")
+        if len(warn) > 8:
+            lines.append(f"> 其余 {len(warn)-8} 只略")
             lines.append("")
 
     if low:
@@ -174,7 +189,7 @@ def main():
             lines.append("")
 
     push(f"🔧 校准 {now:%m.%d}", "\n".join(lines))
-    print(f"[DONE] DPS{dps_updates}只 | 偏高{len(high)} 保守{len(low)}")
+    print(f"[DONE] DPS{dps_updates}只 | 🔥{len(critical)} ⚠️{len(warn)} 🔺{len(low)}")
 
 
 if __name__ == "__main__":
