@@ -116,7 +116,7 @@
     },
     "603568": {
       "name": "伟明环保",
-      "trigger_price": 14.5,
+      "trigger_price": 13,
       "anchor_pct": 3.4,
       "dps": 0.6,
       "current_price": 15.68,
@@ -269,7 +269,7 @@
     },
     "600066": {
       "name": "宇通客车",
-      "trigger_price": 27.0,
+      "trigger_price": 21.0,
       "anchor_pct": 0,
       "dps": 2.5,
       "current_price": 29.82,
@@ -541,7 +541,7 @@
     },
     "002032": {
       "name": "苏泊尔",
-      "trigger_price": 40.0,
+      "trigger_price": 36.0,
       "anchor_pct": 0,
       "dps": 2.63,
       "current_price": 41.68,
@@ -591,7 +591,7 @@
     },
     "603855": {
       "name": "华荣股份",
-      "trigger_price": 15.2,
+      "trigger_price": 13.6,
       "anchor_pct": 0,
       "dps": 1.0,
       "current_price": 16.39,
@@ -622,7 +622,7 @@
     },
     "603508": {
       "name": "思维列控",
-      "trigger_price": 17.7,
+      "trigger_price": 17,
       "anchor_pct": 0,
       "dps": 2.625,
       "current_price": 22.07,
