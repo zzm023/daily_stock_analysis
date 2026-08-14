@@ -1,6 +1,6 @@
 """
-框架状态校准 v5.1 — 只更新DPS，不覆盖触发价
-修复：DPS按年度累加（中期+年末）+ push加诊断日志
+框架状态校准 v5.2 — 只更新DPS，不覆盖触发价
+修复：DPS按年度累加（中期+年末）+ 推送块状格式（手机友好）
 触发价是多重共振锚点，自动化无权改
 """
 import os, json, requests, time
@@ -99,7 +99,7 @@ def fetch_dps_map(codes):
 
 def main():
     now = datetime.now()
-    print(f"[START] 校准 v5.1 {now:%Y-%m-%d}")
+    print(f"[START] 校准 v5.2 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -142,23 +142,28 @@ def main():
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-    lines = [f"## 🔧 校准 v5.1 {now:%m.%d}", "",
-             f"> ⚠️ 仅更新DPS，触发价不动。偏离>5%的请手动复核。", "",
-             f"✅ DPS更新 {dps_updates}只 | 📡 PE偏离>5% {len(drifts)}只", ""]
+    # ── 块状推送格式（手机友好）──
+    lines = [f"## 🔧 校准 {now:%m.%d}", "",
+             f"> 仅更新DPS，触发价不动。偏离>5%请手动复核", "",
+             f"✅ DPS更新 {dps_updates}只 ｜ 📡 PE偏离>5% {len(drifts)}只", ""]
 
     if drifts:
         drifts.sort(key=lambda x: abs(x["drift"]), reverse=True)
-        lines.append("### ⚠️ PE隐含触发价偏离（仅报告，未修改）")
+        lines.append("### ⚠️ PE隐含价偏离（仅报告）")
         lines.append("")
-        lines.append("| 股票 | 当前触发价 | PE隐含价 | 偏离 | PE×EPS |")
-        lines.append("|:--|:--|:--|:--|:--|")
         for d in drifts[:15]:
-            arrow = "↑" if d["drift"] > 0 else "↓"
-            lines.append(f"| {d['name']} | {d['trigger']:.2f} | {d['pe_price']:.2f} | {arrow}{abs(d['drift']):.0f}% | {d['pe']}×{d['eps']:.2f} |")
+            arrow = "🔺" if d["drift"] > 0 else "🔻"
+            lines.append(f"**{d['name']}** {arrow}{abs(d['drift']):.0f}%")
+            lines.append(f"> 触发 {d['trigger']:.2f} → 隐含 {d['pe_price']:.2f}（PE{d['pe']}×EPS{d['eps']:.2f}）")
+            lines.append("")
         if len(drifts) > 15:
-            lines.append(f"| ... | | | +{len(drifts)-15}只 | |")
+            lines.append(f"> 其余 {len(drifts)-15} 只略")
+            lines.append("")
+    else:
+        lines.append("无 PE 偏离超 5% 的标的 ✅")
+        lines.append("")
 
-    push(f"🔧 校准v5.1 {now:%m.%d}", "\n".join(lines))
+    push(f"🔧 校准 {now:%m.%d}", "\n".join(lines))
     print(f"[DONE] DPS{dps_updates}只 | 偏离{len(drifts)}只")
 
 
