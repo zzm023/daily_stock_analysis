@@ -1,6 +1,6 @@
 """
-框架状态校准 v5.4 — 只更新DPS，不覆盖触发价
-修复：DPS按年度累加（中期+年末）+ 🔻分两档（🔥重点≥2倍 / ⚠️偏高）
+框架状态校准 v5.5 — 只更新DPS，不覆盖触发价
+修复：DPS按年度累加 + PE/PB双隐含价（取更保守的一根）
 触发价是多重共振锚点，自动化无权改
 """
 import os, json, requests, time
@@ -46,26 +46,34 @@ def tushare_call(api, params, fields):
     return d["data"]["items"]
 
 
-def fetch_eps_latest(codes):
+def fetch_financials(codes):
+    """拿最新年报 EPS + BPS（每股净资产）"""
     result = {}
     for i, code in enumerate(codes):
         ts = _to_ts(code)
         rows = tushare_call("fina_indicator", {"ts_code": ts},
-                           "ts_code,end_date,eps")
+                           "ts_code,end_date,eps,bps")
         if not rows:
             continue
-        best = None
+        best = {}
         best_year = ""
         for row in rows:
             ed = str(int(row[1]))
-            val = row[2]
-            if not val or not ed.endswith("1231"):
+            if not ed.endswith("1231"):
                 continue
             year = ed[:4]
             if year > best_year:
                 best_year = year
-                best = float(val)
-        if best and best > 0:
+                try:
+                    eps_f = float(row[2]) if row[2] else 0.0
+                except:
+                    eps_f = 0.0
+                try:
+                    bps_f = float(row[3]) if row[3] else 0.0
+                except:
+                    bps_f = 0.0
+                best = {"eps": eps_f, "bps": bps_f}
+        if best:
             result[code] = best
         time.sleep(0.15)
     return result
@@ -101,7 +109,7 @@ def fetch_dps_map(codes):
 
 def main():
     now = datetime.now()
-    print(f"[START] 校准 v5.4 {now:%Y-%m-%d}")
+    print(f"[START] 校准 v5.5 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -110,9 +118,9 @@ def main():
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
     print(f"  触发清单: {len(codes)} 只")
 
-    eps_map = fetch_eps_latest(codes)
+    fin_map = fetch_financials(codes)
     dps_map = fetch_dps_map(codes)
-    print(f"  EPS{len(eps_map)}只 DPS{len(dps_map)}只")
+    print(f"  财务{len(fin_map)}只 DPS{len(dps_map)}只")
 
     dps_updates = 0
     for code, dps in dps_map.items():
@@ -124,37 +132,52 @@ def main():
     for code in codes:
         t = trigger[code]
         pe_upper = t.get("pe_upper", 0)
+        pb_lower = t.get("pb_lower", 0)
         trigger_price = t.get("trigger_price", 0)
-        eps = eps_map.get(code)
+        fin = fin_map.get(code)
+        if not fin or trigger_price <= 0:
+            continue
 
-        if pe_upper > 0 and eps and trigger_price > 0:
-            pe_implied_price = round(pe_upper * eps, 2)
-            drift_pct = (pe_implied_price - trigger_price) / trigger_price * 100
+        eps = fin.get("eps", 0)
+        bps = fin.get("bps", 0)
 
-            if abs(drift_pct) > 5:
-                drifts.append({
-                    "name": t["name"], "code": code,
-                    "trigger": trigger_price,
-                    "pe_price": pe_implied_price,
-                    "drift": round(drift_pct, 1),
-                    "pe": pe_upper, "eps": eps,
-                })
+        pe_implied = pe_upper * eps if (pe_upper > 0 and eps > 0) else None
+        pb_implied = pb_lower * bps if (pb_lower > 0 and bps > 0) else None
+
+        implieds = [x for x in [pe_implied, pb_implied] if x is not None and x > 0]
+        if not implieds:
+            continue
+        key_implied = round(min(implieds), 2)  # 取更保守的一根
+
+        drift = (key_implied - trigger_price) / trigger_price * 100
+
+        if abs(drift) > 5:
+            drifts.append({
+                "name": t["name"], "code": code,
+                "trigger": trigger_price,
+                "implied": key_implied,
+                "drift": round(drift, 1),
+                "pe_implied": round(pe_implied, 2) if pe_implied else None,
+                "pb_implied": round(pb_implied, 2) if pb_implied else None,
+                "pe": pe_upper, "eps": eps,
+                "pb": pb_lower, "bps": bps,
+            })
 
     state["meta"]["updated"] = now.isoformat()
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-    # ── 分三档 ──
-    high = [d for d in drifts if d["drift"] < 0]   # 触发价偏高
-    low = [d for d in drifts if d["drift"] >= 0]   # 触发价保守
+    # ── 分三档（隐含价取 PE/PB 更保守者）──
+    high = [d for d in drifts if d["drift"] < 0]
+    low = [d for d in drifts if d["drift"] >= 0]
     high.sort(key=lambda x: x["drift"])
     low.sort(key=lambda x: -x["drift"])
 
-    critical = [d for d in high if abs(d["drift"]) >= CRITICAL]  # 🔥 贵一倍以上
-    warn = [d for d in high if abs(d["drift"]) < CRITICAL]       # ⚠️ 偏高但<2倍
+    critical = [d for d in high if abs(d["drift"]) >= CRITICAL]
+    warn = [d for d in high if abs(d["drift"]) < CRITICAL]
 
     lines = [f"## 🔧 校准 {now:%m.%d}", "",
-             f"> 仅更新DPS，触发价不动。隐含价=PE上限×EPS（分属性设定）", "",
+             f"> 仅更新DPS，触发价不动。隐含价=PE/PB双锚（取更保守）", "",
              f"✅ DPS更新 {dps_updates}只 ｜ 🔥重点 {len(critical)} ｜ ⚠️偏高 {len(warn)} ｜ 🔺保守 {len(low)}", ""]
 
     if critical:
@@ -162,7 +185,12 @@ def main():
         lines.append("")
         for d in critical[:10]:
             lines.append(f"**{d['name']}** 🔻{abs(d['drift']):.0f}%")
-            lines.append(f"> 触发 {d['trigger']:.2f} → 隐含 {d['pe_price']:.2f}（PE{d['pe']}×EPS{d['eps']:.2f}）")
+            parts = []
+            if d["pe_implied"]:
+                parts.append(f"PE{d['pe']}×{d['eps']:.2f}={d['pe_implied']:.2f}")
+            if d["pb_implied"]:
+                parts.append(f"PB{d['pb']}×{d['bps']:.2f}={d['pb_implied']:.2f}")
+            lines.append(f"> 触发 {d['trigger']:.2f} → 隐含 {d['implied']:.2f}（{' / '.join(parts)}）")
             lines.append("")
         if len(critical) > 10:
             lines.append(f"> 其余 {len(critical)-10} 只略")
