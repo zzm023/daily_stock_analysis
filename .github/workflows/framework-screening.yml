@@ -2,7 +2,7 @@ name: 框架全量筛选
 
 on:
   schedule:
-    - cron: '0 2 * * 1'
+    - cron: '0 2 * * 2'
   workflow_dispatch:
 
 jobs:
