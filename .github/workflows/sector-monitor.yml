@@ -2,7 +2,7 @@ name: 行业集中度
 
 on:
   schedule:
-    - cron: '45 8 * * 1'
+    - cron: '45 8 * * 4'
   workflow_dispatch:
 
 jobs:
