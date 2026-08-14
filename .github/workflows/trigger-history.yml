@@ -2,21 +2,31 @@ name: 触发价追溯
 
 on:
   schedule:
-    - cron: '0 4 * * 1'
+    # 每周一 北京时间08:00 = UTC 00:00
+    - cron: '0 0 * * 1'
   workflow_dispatch:
 
 jobs:
   trigger-history:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置Python
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - run: pip install requests
-      - name: 触发价追溯
+
+      - name: 安装依赖
+        run: |
+          pip install tushare requests
+
+      - name: 运行触发价追溯+校准
         env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
         run: python trigger_history.py
