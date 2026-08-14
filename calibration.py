@@ -1,6 +1,6 @@
 """
-框架状态校准 v5 — 只更新DPS，不覆盖触发价
-修复：DPS按年度累加（中期+年末），不再过滤中期分红
+框架状态校准 v5.1 — 只更新DPS，不覆盖触发价
+修复：DPS按年度累加（中期+年末）+ push加诊断日志
 触发价是多重共振锚点，自动化无权改
 """
 import os, json, requests, time
@@ -19,12 +19,17 @@ def _to_ts(code):
 
 
 def push(title, content):
-    if not PUSHPLUS_TOKEN: return
+    if not PUSHPLUS_TOKEN:
+        print("[Push] ❌ 无 PUSHPLUS_TOKEN，跳过推送")
+        return
     try:
         payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
         if PUSHPLUS_TOPIC: payload["topic"] = PUSHPLUS_TOPIC
-        requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
-    except: pass
+        r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
+        resp = r.json()
+        print(f"[Push] code={resp.get('code')} msg={resp.get('msg')}")
+    except Exception as e:
+        print(f"[Push] ❌ 异常: {e}")
 
 
 def tushare_call(api, params, fields):
@@ -40,7 +45,6 @@ def tushare_call(api, params, fields):
 
 
 def fetch_eps_latest(codes):
-    """拿最新年报EPS，仅供参考"""
     result = {}
     for i, code in enumerate(codes):
         ts = _to_ts(code)
@@ -66,7 +70,6 @@ def fetch_eps_latest(codes):
 
 
 def fetch_dps_map(codes):
-    """按分红年度累加（中期+年末），取最近完整年度"""
     result = {}
     current_year = datetime.now().year
     for i, code in enumerate(codes):
@@ -86,7 +89,6 @@ def fetch_dps_map(codes):
                 continue
             year = ed[:4]
             year_total[year] = year_total.get(year, 0) + val
-        # 只取"过去年度"（当前年度可能只分了中期，未完整）
         valid = {y: t for y, t in year_total.items() if int(y) < current_year}
         if valid:
             best_year = max(valid.keys())
@@ -97,7 +99,7 @@ def fetch_dps_map(codes):
 
 def main():
     now = datetime.now()
-    print(f"[START] 校准 v5 {now:%Y-%m-%d}")
+    print(f"[START] 校准 v5.1 {now:%Y-%m-%d}")
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
@@ -110,14 +112,12 @@ def main():
     dps_map = fetch_dps_map(codes)
     print(f"  EPS{len(eps_map)}只 DPS{len(dps_map)}只")
 
-    # ── 只更新 DPS，不碰触发价 ──
     dps_updates = 0
     for code, dps in dps_map.items():
         if code in trigger and dps != trigger[code].get("dps", 0):
             trigger[code]["dps"] = dps
             dps_updates += 1
 
-    # ── 计算 PE 偏离度（仅报告，不修改）──
     drifts = []
     for code in codes:
         t = trigger[code]
@@ -142,7 +142,7 @@ def main():
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-    lines = [f"## 🔧 校准 v5 {now:%m.%d}", "",
+    lines = [f"## 🔧 校准 v5.1 {now:%m.%d}", "",
              f"> ⚠️ 仅更新DPS，触发价不动。偏离>5%的请手动复核。", "",
              f"✅ DPS更新 {dps_updates}只 | 📡 PE偏离>5% {len(drifts)}只", ""]
 
@@ -158,7 +158,7 @@ def main():
         if len(drifts) > 15:
             lines.append(f"| ... | | | +{len(drifts)-15}只 | |")
 
-    push(f"🔧 校准v5 {now:%m.%d}", "\n".join(lines))
+    push(f"🔧 校准v5.1 {now:%m.%d}", "\n".join(lines))
     print(f"[DONE] DPS{dps_updates}只 | 偏离{len(drifts)}只")
 
 
