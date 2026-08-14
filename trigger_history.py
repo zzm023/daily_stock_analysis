@@ -1,131 +1,200 @@
+#!/usr/bin/env python3
 """
-触发价历史追溯 v10（最终版）
-腾讯 parts[41]/[42] = 近期波动区间 / 50只全覆盖
+触发价历史追溯 + 校准提醒 v11
+1. 股息率锚校准（新增）：dps/锚定股息率 对应价 vs 触发价，偏离±15%提醒
+2. 近期波动验证（保留）：触发价 vs 近60日低点（Tushare daily）
+铁律：只提醒，不自动改触发价
+数据源：framework_state.json + Tushare daily
+运行：周一 08:00
 """
-import os, json, requests, re
-from datetime import datetime
-from pathlib import Path
+import os
+import json
+import time
+import requests
+from datetime import datetime, timedelta, timezone
+import tushare
 
-STATE_FILE = Path(__file__).parent / "framework_state.json"
+STATE_FILE = "framework_state.json"
+TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
+THRESHOLD = 15.0  # 股息率锚偏离阈值 ±15%
 
-def batch_range(codes):
-    """腾讯批量 parts[41]=近期高 parts[42]=近期低"""
-    result = {}
-    for i in range(0, len(codes), 30):
-        batch = codes[i:i+30]
-        symbols = ",".join(f"sh{c}" if c.startswith("6") else f"sz{c}" for c in batch)
-        try:
-            r = requests.get(f"http://qt.gtimg.cn/q={symbols}", timeout=15)
-            r.encoding = "gbk"
-            text = r.text
-            for c in batch:
-                prefix = "sh" if c.startswith("6") else "sz"
-                m = re.search(f"v_{prefix}{c}=\"[^\"]*\"", text)
-                if not m:
-                    continue
-                parts = m.group().split("~")
-                if len(parts) < 45:
-                    continue
-                try:
-                    price = float(parts[3]) if parts[3] else None
-                    high = float(parts[41]) if parts[41] else None
-                    low = float(parts[42]) if parts[42] else None
-                    if (price and high and low and high > 0 and low > 0
-                        and 0.3*price < low < 3*price
-                        and 0.3*price < high < 3*price):
-                        result[c] = (price, high, low)
-                except:
-                    pass
-        except Exception as e:
-            print(f"  批次失败: {e}")
-    return result
+
+def load_state():
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[WARN] 读取 {STATE_FILE} 失败: {e}")
+        return {"trigger": {}}
+
+
+def to_ts_code(code):
+    if code.startswith("6"):
+        return code + ".SH"
+    elif code.startswith(("0", "3")):
+        return code + ".SZ"
+    elif code.startswith(("8", "4")):
+        return code + ".BJ"
+    return code
+
+
+def get_latest_trade_date(pro, now):
+    end = now.strftime("%Y%m%d")
+    start = (now - timedelta(days=15)).strftime("%Y%m%d")
+    try:
+        df = pro.trade_cal(exchange="SSE", start_date=start, end_date=end,
+                           is_open="1")
+        if df is not None and not df.empty:
+            days = sorted(str(d) for d in df["cal_date"].tolist())
+            today = now.strftime("%Y%m%d")
+            if now.hour < 17:
+                days = [d for d in days if d < today]
+            return days[-1] if days else None
+    except Exception as e:
+        print(f"  [trade_cal] {e}")
+    return None
+
+
+def fetch_recent_lows(pro, codes, latest_td):
+    """Tushare daily 批量拿近90日最低价"""
+    lows = {}
+    ts_codes = ",".join(to_ts_code(c) for c in codes)
+    start = (datetime.strptime(latest_td, "%Y%m%d") - timedelta(days=90)).strftime("%Y%m%d")
+    try:
+        df = pro.daily(ts_code=ts_codes, start_date=start, end_date=latest_td,
+                       fields="ts_code,low")
+        if df is not None and not df.empty:
+            for code in codes:
+                tsc = to_ts_code(code)
+                sub = df[df["ts_code"] == tsc]
+                if not sub.empty:
+                    try:
+                        lows[code] = float(sub["low"].min())
+                    except:
+                        pass
+    except Exception as e:
+        print(f"  [daily] {e}")
+    return lows
 
 
 def push(title, content):
     if not PUSHPLUS_TOKEN:
+        print("[WARN] 无TOKEN")
         return
     try:
-        payload = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "markdown"}
+        payload = {"token": PUSHPLUS_TOKEN, "title": title,
+                   "content": content, "template": "markdown"}
         if PUSHPLUS_TOPIC:
             payload["topic"] = PUSHPLUS_TOPIC
-        requests.post("http://www.pushplus.plus/send", json=payload, timeout=10)
-    except:
-        pass
+        r = requests.post("http://www.pushplus.plus/send", json=payload, timeout=30)
+        print(f"[{'OK' if r.json().get('code') == 200 else 'FAIL'}] PushPlus")
+    except Exception as e:
+        print(f"[PushPlus] {e}")
 
 
 def main():
-    now = datetime.now()
-    print(f"[START] 触发价追溯 v10 {now:%Y-%m-%d}")
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    print(f"[START] 触发价追溯+校准 v11 {now:%Y-%m-%d}")
 
-    with open(STATE_FILE, "r") as f:
-        state = json.load(f)
+    if not TUSHARE_TOKEN:
+        print("[SKIP] 未配置 TUSHARE_TOKEN")
+        return
 
+    pro = tushare.pro_api(TUSHARE_TOKEN)
+    state = load_state()
     trigger = state.get("trigger", {})
+
+    latest_td = get_latest_trade_date(pro, now)
+    print(f"  最近交易日: {latest_td}")
+    if not latest_td:
+        return
+
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
-    data = batch_range(codes)
-    print(f"  获取 {len(data)}/{len(codes)} 只")
+    lows = fetch_recent_lows(pro, codes, latest_td)
+    print(f"  近期低点覆盖: {len(lows)}/{len(codes)}")
 
-    hit = []
-    never = []
+    # ── 1. 股息率锚校准 ──
+    anchor_alerts = []
+    for code in codes:
+        t = trigger[code]
+        dps = t.get("dps", 0)
+        anchor = t.get("anchor_pct", 0)
+        tp = t.get("trigger_price", 0)
+        name = t.get("name", code)
+        if not (dps and anchor and tp):
+            continue
+        target = dps / (anchor / 100.0)
+        dev = (target - tp) / tp * 100
+        if abs(dev) >= THRESHOLD:
+            anchor_alerts.append((name, code, tp, target, dev, dps, anchor))
 
+    # ── 2. 近期波动验证 ──
+    hit, close, far = [], [], []
     for code in codes:
         t = trigger[code]
         tp = t.get("trigger_price", 0)
         name = t.get("name", code)
-        if not tp:
+        low = lows.get(code)
+        if not tp or low is None:
             continue
-        d = data.get(code)
-        if not d:
-            continue
-        _, high, low = d
-
         if low <= tp:
             gap = round((tp - low) / low * 100, 1)
-            hit.append((name, tp, low, high, gap))
+            hit.append((name, tp, low, gap))
         else:
             gap = round((low - tp) / tp * 100, 1)
-            never.append((name, tp, low, high, gap))
+            if gap <= 5:
+                close.append((name, tp, low, gap))
+            else:
+                far.append((name, tp, low, gap))
 
-    lines = [
-        f"触发价追溯 {now:%m}.{now:%d}",
-        f"近期波动 vs 触发价 | {len(data)}/{len(codes)}只",
-        "",
-    ]
+    # ── 3. 推送 ──
+    lines = [f"## 🎯 触发价追溯+校准 {now:%m.%d}", "",
+             f"> 数据日 {latest_td} | 近期低点覆盖 {len(lows)}/{len(codes)}", ""]
 
-    # 全文总结
-    touchable = [n for n,_,l,_,_ in hit if tp] + [n for n,_,l,_,g in never if g <= 5]
-    strict = len(never) - len([n for n,_,_,_,g in never if g <= 5])
+    # 股息率锚校准部分
+    if anchor_alerts:
+        lines.append(f"### ⚠️ 股息率锚偏离（需重估，±{THRESHOLD:.0f}%）")
+        lines.append("")
+        for name, code, tp, target, dev, dps, anchor in anchor_alerts:
+            direction = "↑ 该上调" if dev > 0 else "↓ 该下调"
+            lines.append(f"- **{name}**({code}) {direction}")
+            lines.append(f"  触发价 {tp:.2f} → 股息率对应价 {target:.2f}（偏离 {dev:+.1f}%）")
+            lines.append(f"  依据 DPS {dps:.3f} ÷ {anchor:.1f}%")
+        lines.append("")
+    else:
+        lines.append("### ✅ 股息率锚：无偏离超阈值")
+        lines.append("")
 
-    lines.append(f"触发过的 {len(hit)}只 | 距触发≤5% {len([1 for _,_,_,_,g in never if g <= 5])}只 | 偏严 {strict}只")
+    # 近期波动验证部分
+    lines.append(f"### 近期波动验证（近90日低点 vs 触发价）")
+    lines.append("")
+    lines.append(f"> 触发过 {len(hit)} | 距触发≤5% {len(close)} | 偏严 {len(far)}")
     lines.append("")
 
     if hit:
-        lines.append("触发过（价合理）")
-        for name, tp, low, high, gap in sorted(hit, key=lambda x: -x[4])[:8]:
-            lines.append(f"  - {name} 触发{tp:.2f} 近期低{low:.2f} 穿透{gap}%")
-
-    close = [(n, tp, l, h, g) for n, tp, l, h, g in never if g <= 5]
+        lines.append(f"**触发过（价合理）**")
+        for name, tp, low, gap in sorted(hit, key=lambda x: -x[3])[:8]:
+            lines.append(f"- {name} 触发{tp:.2f} 近期低{low:.2f} 穿透{gap}%")
+        lines.append("")
     if close:
+        lines.append(f"**距触发≤5%（接近）**")
+        for name, tp, low, gap in sorted(close, key=lambda x: x[3])[:10]:
+            lines.append(f"- {name} 触发{tp:.2f} 近期低{low:.2f} 距{gap}%")
         lines.append("")
-        lines.append("距触发≤5%（接近）")
-        for name, tp, low, high, gap in sorted(close, key=lambda x: x[4])[:10]:
-            lines.append(f"  - {name} 触发{tp:.2f} 近期低{low:.2f} 距{gap}%")
-
-    far = [(n, tp, l, h, g) for n, tp, l, h, g in never if g > 5]
     if far:
+        lines.append(f"**距触发>5%（偏严，{len(far)}只）**")
+        for name, tp, low, gap in sorted(far, key=lambda x: x[3])[:8]:
+            lines.append(f"- {name} 触发{tp:.2f} 近期低{low:.2f} 距{gap}%")
         lines.append("")
-        lines.append(f"距触发>5%（{len(far)}只）")
-        for name, tp, low, high, gap in sorted(far, key=lambda x: x[4])[:8]:
-            lines.append(f"  - {name} 触发{tp:.2f} 近期低{low:.2f} 距{gap}%")
 
-    lines.append("")
-    lines.append(f"> 腾讯数据 parts[41/42]=近期波动区间 | 非52周")
+    lines.append("---")
+    lines.append(f"只提醒不自动改触发价 | {now:%m-%d %H:%M}")
 
-    push(f"触发价追溯 {now:%m}.{now:%d}", "\n".join(lines))
-    print(f"[DONE] 触发过{len(hit)} 接近{len(close)} 偏严{len(far)}")
+    push(f"🎯 触发价追溯+校准 {now:%m.%d}", "\n".join(lines))
+    print(f"[DONE] 股息锚偏离{len(anchor_alerts)} 触发过{len(hit)} 接近{len(close)} 偏严{len(far)}")
 
 
 if __name__ == "__main__":
