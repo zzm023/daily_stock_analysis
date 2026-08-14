@@ -1,7 +1,7 @@
 """
-触发价总监控 v1.5（任务①）
-功能：已触发 + 买入候选（gap≤10%） + 距触发价排行
-数据源：framework_state.json（触发价/持仓） + 东财实时价（分批拉取）
+触发价总监控 v1.6（任务①）
+功能：已触发 + 买入候选（gap≤10%） + 距触发价排行 + 建议仓位
+数据源：framework_state.json（触发价/持仓） + attr_map.json（分类） + 东财实时价
 联动：PE/PB共振交给「估值共振」任务（Tushare），本任务只做gap
 运行：收盘后 15:45
 注意：东财f2返回"分"需÷100；分批请求避免URL过长502
@@ -13,10 +13,24 @@ from datetime import datetime, timedelta, timezone
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 FRAMEWORK_FILE = "framework_state.json"
+ATTR_FILE = "attr_map.json"
 
 GAP_CLOSE = 10.0   # 买入候选：gap ≤ 10%
 RANK_TOP = 10      # 距触发价排行前 N 名
 BATCH_SIZE = 20    # 每批请求的股票数
+
+TOTAL_CAPITAL = 600000  # 总资金 60万（可改）
+
+# 六类仓位上限
+POSITION_CAP = {
+    "①永续债": 0.15,   # ≤15%
+    "②高息成长": 0.08,  # ≤8%
+    "③周期拐点": 0.03,  # ≤3%
+    "④全球寡头": 0.02,  # ≤2%
+    "⑤品牌心智": 0.08,  # ≤8%
+    "⑥小众冠军": 0.08,  # ≤8%
+    "科技✅⚠": 0.08,    # ≤8%
+}
 
 
 def to_secid(code):
@@ -34,6 +48,14 @@ def load_framework():
     trigger = data.get("trigger", {})
     holdings = {k: v for k, v in data.get("holdings", {}).items() if k != "cash"}
     return trigger, holdings
+
+
+def load_attr_map():
+    try:
+        with open(ATTR_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
 
 
 def fetch_prices(secids, retries=3):
@@ -82,11 +104,21 @@ def push(title, content):
         print(f"  [Push] {e}")
 
 
+def cap_line(attr, code):
+    """生成建议仓位行"""
+    cap = POSITION_CAP.get(attr, 0)
+    if cap <= 0:
+        return ""
+    amt = TOTAL_CAPITAL * cap / 10000
+    return f"  💰 建议仓位 {attr} ≤{cap*100:.0f}%（约{amt:.0f}万）"
+
+
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 触发价总监控 {now:%m-%d %H:%M}")
+    print(f"[START] 触发价总监控 v1.6 {now:%m-%d %H:%M}")
 
     trigger, holdings = load_framework()
+    attr_map = load_attr_map()
     hold_codes = set(holdings.keys())
 
     candidates = []
@@ -156,6 +188,9 @@ def main():
         for r in hit:
             tag = "｜补仓" if r["is_hold"] else "｜待买"
             lines.append(f"· {r['name']}({r['code']}) {r['price']:.2f}→{r['trigger']:.2f} 距{r['gap']:+.1f}%{tag}")
+            cl = cap_line(attr_map.get(r["code"], ""), r["code"])
+            if cl:
+                lines.append(cl)
             lines.append("")
 
     if close:
@@ -163,6 +198,9 @@ def main():
         lines.append("")
         for r in close:
             lines.append(f"· {r['name']}({r['code']}) {r['price']:.2f}→{r['trigger']:.2f} 距{r['gap']:+.1f}%")
+            cl = cap_line(attr_map.get(r["code"], ""), r["code"])
+            if cl:
+                lines.append(cl)
             lines.append("")
 
     if ranking:
