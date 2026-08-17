@@ -1,6 +1,8 @@
 """
-股息率周报 v3 — Tushare版
-数据源：Tushare分红 + 新浪现价
+股息率周报 v4 — 联动 framework_state.json
+数据源：Tushare分红(12M) + 新浪现价 + framework_state.json（触发价/锚定/dps）
+v4变更：触发价、锚定、dps 优先读 framework_state.json 的 trigger 表，
+        内置 DIV 表只作兜底。手动改的触发价立即在周报生效，不再用 dps/锚定反推。
 """
 import requests, re, os, json, time
 from datetime import datetime, timedelta
@@ -10,6 +12,9 @@ TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
+FRAMEWORK_FILE = "framework_state.json"
+
+# 周报覆盖名单（兜底值：仅当 state 里缺该股/缺字段时使用）
 DIV = {
     "600036": {"name": "招商银行", "dps": 2.02, "anchor": 6.0},
     "601601": {"name": "中国太保", "dps": 1.15, "anchor": 3.4},
@@ -26,6 +31,15 @@ DIV = {
 }
 
 CUTOFF = (datetime.now() - timedelta(days=540)).date()
+CLOSE_PCT = 0.02  # 现价高于触发价≤2% → 计入"接近触发"
+
+
+def load_state():
+    try:
+        with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def _to_ts_code(code):
@@ -99,50 +113,65 @@ def push(title, content):
 
 def main():
     now = datetime.now()
-    print(f"[START] 股息率周报 v3 {now:%Y-%m-%d}")
+    print(f"[START] 股息率周报 v4 {now:%Y-%m-%d}")
+
+    state = load_state()
+    triggers = state.get("trigger", {})
 
     rows = []
-    for code, v in DIV.items():
+    for code, fallback in DIV.items():
+        st = triggers.get(code, {})
+        name = st.get("name") or fallback["name"]
+        # 触发价/锚定/dps：优先 state，缺了用 DIV 兜底
+        trigger_price = st.get("trigger_price") or 0
+        anchor = st.get("anchor_pct") or fallback["anchor"]
+        fallback_dps = st.get("dps") or fallback["dps"]
+
         dps, src = fetch_dps_tushare(code)
         if dps is None:
-            dps = v["dps"]
-            src = "兜底"
+            dps = fallback_dps
+            src = "兜底·state" if st.get("dps") else "兜底"
 
         price = fetch_price(code)
         yld = (dps / price * 100) if price > 0 else 0
-        gap = v["anchor"] - yld
-        rows.append((v["name"], code, price, dps, src, yld, v["anchor"], gap))
-        print(f"  {v['name']}: DPS={dps:.3f}[{src}] 价={price:.2f} 息率={yld:.2f}%")
+        # state 没配触发价时，才用 dps/锚定反推
+        if not trigger_price:
+            trigger_price = round(dps / anchor * 100, 2) if dps and anchor else 0
+
+        rows.append((name, code, price, dps, src, yld, anchor, trigger_price))
+        print(f"  {name}: DPS={dps:.3f}[{src}] 价={price:.2f} 息率={yld:.2f}% 触发价={trigger_price:.2f}")
         time.sleep(0.2)
 
     # ── 推送 ──
     rows.sort(key=lambda x: -x[5])
     lines = [f"## 💰 股息率周报 — {now:%Y.%m.%d}", "",
-             f"> DPS：Tushare 12M ｜ 现价：新浪 ｜ {now:%m-%d %H:%M}", ""]
+             f"> DPS：Tushare 12M ｜ 现价：新浪 ｜ 触发价：framework_state.json ｜ {now:%m-%d %H:%M}", ""]
 
-    for name, code, price, dps, src, yld, anchor, gap in rows:
-        trigger_price = round(dps / anchor * 100, 2) if dps and anchor else 0
+    triggered, close = [], []
+    for name, code, price, dps, src, yld, anchor, trigger_price in rows:
         diff = trigger_price - price
-        if gap < 0:
-            status = f"🔴 已触发（超{-gap:.1f}pp）"
-        elif gap == 0:
-            status = "🎯 持平"
+        if trigger_price > 0 and diff <= 0:
+            status = "🔴 已触发"
+        elif trigger_price > 0 and diff / trigger_price <= CLOSE_PCT:
+            status = "🟡 接近"
         else:
             status = f"🟢 差{diff:+.2f}元"
         lines.append(f"**{name}**")
         lines.append(f"现价 {price:.2f} → 触发价 {trigger_price:.2f} | 股息率 {yld:.2f}% | 锚定 {anchor:.1f}% | {status}")
         lines.append("")
+        if trigger_price > 0 and diff <= 0:
+            triggered.append((name, yld, diff))
+        elif trigger_price > 0 and diff / trigger_price <= CLOSE_PCT:
+            close.append((name, yld, diff))
 
-    triggered = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g <= 0]
-    close = [(n, g, y) for n, _, _, _, _, y, _, g in rows if g > 0 and g <= 0.5]
     if triggered:
         lines.append("### 🔴 已触发")
-        for n, g, y in triggered:
-            lines.append(f"- {n}：{y:.2f}%（超额{-g:.1f}pp）")
+        for n, y, d in triggered:
+            lines.append(f"- {n}：{y:.2f}%，现价低于触发价 {-d:.2f} 元")
     if close:
         lines.append("### 🟡 接近触发")
-        for n, g, y in close:
-            lines.append(f"- {n}：{y:.2f}%，差{g:.1f}pp")
+        for n, y, d in close:
+            lines.append(f"- {n}：{y:.2f}%，距触发价还差 {d:.2f} 元")
 
     push(f"💰 股息率周报 {now:%Y.%m.%d}", "\n".join(lines))
     print(f"[DONE] {len(rows)} 只")

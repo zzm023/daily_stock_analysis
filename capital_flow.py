@@ -1,9 +1,13 @@
 """
-聪明钱联动哨兵 v1.2（任务⑦）
+聪明钱联动哨兵 v1.3（任务⑦）
 功能：持仓股+买入候选的主力资金流向（聪明钱信号）
 数据源：Tushare moneyflow（个股资金流向）
 联动：聪明钱流入+接近触发价=强买点；聪明钱流出持仓=警示
 运行：收盘后 17:30
+v1.3变更：
+  1. 修复 f2 单位bug：东财push2接口 f2 就是元，去掉 /100（与盘中异动v5一致）；
+  2. 每只股票打印 数据行数/净流入，moneyflow 返回空时明确提示，日志自带诊断；
+  3. end_date 用当天（收盘后跑，当天数据已出），避免周末日期空窗。
 """
 
 import os, json, time, requests
@@ -38,10 +42,12 @@ def load_framework():
     try:
         with open(FRAMEWORK_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except:
+    except Exception as e:
+        print(f"  [框架] framework_state.json 读取失败: {e}")
         return {}, {}
     trigger = data.get("trigger", {})
     holdings = {k: v for k, v in data.get("holdings", {}).items() if k != "cash"}
+    print(f"  [框架] 持仓{len(holdings)}只 触发价{len(trigger)}只")
     return trigger, holdings
 
 
@@ -69,6 +75,8 @@ def fetch_prices(secids, retries=3):
             except Exception as e:
                 print(f"  [东财] 第{i // BATCH_SIZE + 1}批 第{attempt+1}次失败: {e}")
             time.sleep(3)
+        if not ok:
+            print(f"  [东财] 第{i // BATCH_SIZE + 1}批 3次重试均失败")
         time.sleep(2)
     return all_diff
 
@@ -111,7 +119,7 @@ def main():
     for q in quotes:
         code = q.get("f12", "")
         try:
-            price = float(q.get("f2", 0)) / 100
+            price = float(q.get("f2", 0))   # v1.3: f2 就是元，不再 /100
         except:
             price = 0
         if code:
@@ -125,32 +133,42 @@ def main():
         if price > 0 and (price - tp) / tp * 100 <= GAP_LIMIT:
             targets[code] = {"name": info.get("name", code), "is_hold": False, "trigger": tp}
 
-    end = (now - timedelta(days=1)).strftime("%Y%m%d")
+    if not targets:
+        print("[WARN] 监控目标为空（持仓+候选都为0），请检查 framework_state.json")
+        push("⚠️ 聪明钱哨兵无监控目标", "## ⚠️ 聪明钱哨兵\n\n监控目标为空，请检查 framework_state.json 的 holdings/trigger。")
+        return
+
+    end = now.strftime("%Y%m%d")
     start = (now - timedelta(days=DAYS + 15)).strftime("%Y%m%d")
 
     inflow = []
     outflow = []
+    empty_count = 0
 
     for code, meta in targets.items():
         tscode = to_tscode(code)
         try:
             df = pro.moneyflow(ts_code=tscode, start_date=start, end_date=end,
                                fields='ts_code,trade_date,net_mf_amount')
-            if df is not None and not df.empty:
-                df = df.sort_values("trade_date").tail(DAYS)
-                net = df["net_mf_amount"].sum() / 10000   # 万元 → 亿元
-                if net >= INFLOW_TH:
-                    inflow.append((meta["name"], code, net, meta["is_hold"], meta["trigger"]))
-                elif net <= -OUTFLOW_TH:
-                    outflow.append((meta["name"], code, net, meta["is_hold"], meta["trigger"]))
+            if df is None or df.empty:
+                empty_count += 1
+                print(f"  {meta['name']}({code}) 无资金流数据")
+                continue
+            df = df.sort_values("trade_date").tail(DAYS)
+            net = df["net_mf_amount"].sum() / 10000   # 万元 → 亿元
+            print(f"  {meta['name']}({code}) 近{len(df)}行 净流入{net:+.2f}亿")
+            if net >= INFLOW_TH:
+                inflow.append((meta["name"], code, net, meta["is_hold"], meta["trigger"]))
+            elif net <= -OUTFLOW_TH:
+                outflow.append((meta["name"], code, net, meta["is_hold"], meta["trigger"]))
         except Exception as e:
-            print(f"  {meta['name']} 资金流失败: {e}")
+            print(f"  {meta['name']}({code}) 资金流失败: {e}")
         time.sleep(0.3)
 
     inflow.sort(key=lambda x: -x[2])
     outflow.sort(key=lambda x: x[2])
 
-    print(f"  流入 {len(inflow)} | 流出 {len(outflow)}")
+    print(f"  流入 {len(inflow)} | 流出 {len(outflow)} | 无数据 {empty_count}")
 
     lines = [
         f"## 📊 聪明钱哨兵 {now:%m-%d %H:%M}",
@@ -176,7 +194,10 @@ def main():
             lines.append("")
 
     if not inflow and not outflow:
-        lines.append("暂无主力资金异常信号。")
+        if empty_count == len(targets):
+            lines.append(f"⚠️ 全部 {empty_count} 只均无资金流数据，疑似 Tushare moneyflow 权限/积分或数据问题，请检查。")
+        else:
+            lines.append("暂无主力资金异常信号。")
         lines.append("")
 
     lines.append("⚠️ 聪明钱信号是博弈参考，不是买卖依据。收租底仓为主，主力资金仅作情绪联动。")
