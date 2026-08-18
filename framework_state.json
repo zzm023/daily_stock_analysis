@@ -436,7 +436,7 @@
     },
     "002027": {
       "name": "分众传媒",
-      "trigger_price": 5.26,
+      "trigger_price": 4.3,
       "anchor_pct": 3.5,
       "dps": 0.34,
       "current_price": 5.29,
@@ -715,7 +715,7 @@
     },
     "300627": {
       "name": "华测导航",
-      "trigger_price": 26.5,
+      "trigger_price": 25,
       "anchor_pct": 0,
       "dps": 0.45,
       "current_price": 28.17,
