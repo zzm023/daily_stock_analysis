@@ -1,9 +1,12 @@
 """
-价格异动监控（盘中实时）v5.1
+价格异动监控（盘中实时）v5.2
 ① 触价即报：现价 ≤ 触发价（framework_state.json trigger_price，每日每只一次）
-② 涨跌幅异动：持仓(±3%) + 所有设触发价的观察股(±5%)
-   v5.1变更：东财接口格式自愈——涨跌幅|>25%|或价格超触发价/成本10倍时视为×100脏数据归一化，
-   不再假设 f2/f3 固定单位（08-18实测东财返回×100格式，导致48只误报）。
+② 涨跌幅异动：仅 持仓股 + 距触发价≤10%的观察股，|涨跌幅|≥3%
+   v5.2变更（08-18用户指示）：
+   1. 幅度错误根治：弃用单位不稳的 f3，改用 f2(现价)/f18(昨收) 计算涨跌幅；
+   2. 范围收窄：所有观察股 → 仅 持仓 + 距触发价≤10% 的观察股；
+   3. 阈值统一：观察股 ±5% → ±3%（与持仓一致，±≥3%才推送）；
+   4. 推送格式：一只股票一行（空行分隔，防markdown并成一段）。
 数据源：framework_state.json（触发价+持仓） + 东财实时价
 """
 
@@ -16,9 +19,10 @@ PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 FRAMEWORK_FILE = "framework_state.json"
 STATE_FILE = "price_alert_state.json"
 
-HOLD_THRESHOLD = 3.0    # 持仓 ±3%
-WATCH_THRESHOLD = 5.0   # 观察 ±5%
+MOVE_THRESHOLD = 3.0    # 持仓/观察统一 ±3%
+GAP_LIMIT = 10.0        # 观察股：|距触发价|≤10% 才监控涨跌幅
 LEVELS = [3.0, 5.0, 7.0, 9.0]
+MAX_DAILY_MOVE = 21.0   # A股日涨跌上限（主板10%/创业科创20%），超21必为脏数据
 
 EXCLUDE = {"002747"}    # 埃斯顿（负成本，不监控）
 
@@ -51,7 +55,7 @@ def push(title, content):
 
 def fetch_quotes(secids):
     url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
-    params = {"secids": ",".join(secids), "fields": "f2,f3,f12,f14"}
+    params = {"secids": ",".join(secids), "fields": "f2,f3,f12,f14,f18"}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://quote.eastmoney.com/",
@@ -130,7 +134,7 @@ def main():
             print("[SKIP] 无候选（今日已告警一次）")
         return
 
-    # 拉实时价
+    # 拉实时价（f18=昨收，用于计算真实涨跌幅）
     secids = [to_secid(c) for c in candidates.keys()]
     quotes = fetch_quotes(secids)
     if not quotes:
@@ -152,21 +156,31 @@ def main():
         if not meta:
             continue
         try:
-            price = float(q.get("f2", 0))
+            price = float(q.get("f2", 0) or 0)
         except:
-            price = 0
+            price = 0.0
         try:
-            change = float(str(q.get("f3", "0")).replace("%", ""))
+            prev = float(q.get("f18", 0) or 0)
         except:
-            change = 0
-        # 格式自愈：A股涨跌幅上限20%，|change|>25 必为×100脏数据；
-        # 价格超过触发价/成本10倍同样视为×100（08-18误报根因）
-        if abs(change) > 25:
-            change /= 100
-        if price > 0:
-            ref = meta["trigger"] or meta.get("cost", 0) or 0
-            if ref > 0 and price > ref * 10:
-                price /= 100
+            prev = 0.0
+        try:
+            f3_raw = float(str(q.get("f3", "0")).replace("%", ""))
+        except:
+            f3_raw = 0.0
+        # 涨跌幅：优先 (现价-昨收)/昨收，单位恒正确（08-18幅度错误根因是f3单位不稳）
+        if price > 0 and prev > 0:
+            change = (price - prev) / prev * 100
+        elif abs(f3_raw) <= MAX_DAILY_MOVE:
+            change = f3_raw
+        else:
+            change = 0.0
+        # A股日内涨跌上限内才可信，超上限必为脏数据 → 该股不参与涨跌异动
+        if abs(change) > MAX_DAILY_MOVE:
+            change = 0.0
+        # 价格自愈：×100脏数据时除以100（用于触价比较与展示）
+        ref = meta["trigger"] or meta.get("cost", 0) or 0
+        if price > 0 and ref > 0 and price > ref * 10:
+            price /= 100
         price_map[code] = {"price": price, "change": change}
 
     state = load_state()
@@ -182,31 +196,30 @@ def main():
         change = price_map[code]["change"]
         tp = meta["trigger"]
 
-        # ① 触价即报：现价 ≤ 触发价（不受 gap 过滤限制，每日每只一次）
+        # ① 触价即报：现价 ≤ 触发价（全部触发价股，每日每只一次）
         if tp > 0 and price > 0 and price <= tp:
             key = f"hit_{today}_{code}"
             if not state.get(key):
                 cross_alerts.append((meta["name"], code, price, tp, meta["is_hold"]))
                 state[key] = 1
 
-        # ② 涨跌幅异动（原逻辑）
+        # ② 涨跌幅异动：仅 持仓股 + 距触发价≤10%的观察股
         if meta["is_hold"]:
-            threshold = HOLD_THRESHOLD
             watch_count += 1
         else:
-            if price <= 0:
+            if price <= 0 or tp <= 0:
                 continue
-            # v5：所有设触发价的观察股都监控涨跌幅，不再用 gap 过滤
-            threshold = WATCH_THRESHOLD
+            gap = (price - tp) / tp * 100
+            if abs(gap) > GAP_LIMIT:
+                continue    # 距触发价超10%，不监控涨跌幅
             watch_count += 1
 
-        abs_chg = abs(change)
-        if abs_chg < threshold:
+        if abs(change) < MOVE_THRESHOLD:
             continue
 
         cur_level = 0.0
         for lv in LEVELS:
-            if abs_chg >= lv:
+            if abs(change) >= lv:
                 cur_level = lv
 
         key = f"{today}_{code}"
@@ -227,8 +240,8 @@ def main():
         lines.append("### 🎯 触达触发价（现价 ≤ 触发价）")
         for name, code, price, tp, is_hold in cross_alerts:
             tag = "持仓·补仓" if is_hold else "待买"
-            lines.append(f"**{name}**({code}) [{tag}] 现价 {price:.2f} ≤ 触发价 {tp:.2f}")
-        lines.append("")
+            lines.append(f"{name}({code}) [{tag}] 现价 {price:.2f} ≤ 触发价 {tp:.2f}")
+            lines.append("")
         lines.append("> ⚠️ 触发 ≠ 立即买。左侧分层：目标价打9折、仓位减半、观察1周。")
         lines.append("")
 
@@ -239,9 +252,9 @@ def main():
             arrow = "🔴" if change < 0 else "🟢"
             gap_str = ""
             if not is_hold and tp > 0:
-                gap_str = f"（距触发价{(price - tp) / tp * 100:.1f}%）"
-            lines.append(f"{arrow} **{name}**({code}) [{tag}] 涨跌 **{change:+.2f}%**（≥{lv:.0f}%档）{gap_str}")
-        lines.append("")
+                gap_str = f" 距触发价{(price - tp) / tp * 100:+.1f}%"
+            lines.append(f"{arrow} {name}({code}) [{tag}] 涨跌 {change:+.2f}% 现价 {price:.2f}{gap_str}")
+            lines.append("")
 
     lines.append(f"---\n盘中监控 {watch_count}只 · {now:%m-%d %H:%M}")
 
