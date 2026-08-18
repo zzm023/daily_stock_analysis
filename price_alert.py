@@ -1,9 +1,9 @@
 """
-价格异动监控（盘中实时）v5
+价格异动监控（盘中实时）v5.1
 ① 触价即报：现价 ≤ 触发价（framework_state.json trigger_price，每日每只一次）
 ② 涨跌幅异动：持仓(±3%) + 所有设触发价的观察股(±5%)
-   v5变更：取消观察股 10% gap 过滤——触发价下调后个股会跌出监控圈导致漏报，
-   现改为框架内所有 trigger_price>0 的股票都监控。
+   v5.1变更：东财接口格式自愈——涨跌幅|>25%|或价格超触发价/成本10倍时视为×100脏数据归一化，
+   不再假设 f2/f3 固定单位（08-18实测东财返回×100格式，导致48只误报）。
 数据源：framework_state.json（触发价+持仓） + 东财实时价
 """
 
@@ -107,7 +107,7 @@ def main():
     for code, info in holdings.items():
         if code in EXCLUDE:
             continue
-        candidates[code] = {"name": info.get("name", code), "is_hold": True, "trigger": 0}
+        candidates[code] = {"name": info.get("name", code), "is_hold": True, "trigger": 0, "cost": info.get("cost", 0) or 0}
 
     for code, info in trigger.items():
         tp = info.get("trigger_price", 0) or 0
@@ -148,15 +148,26 @@ def main():
     price_map = {}
     for q in quotes:
         code = q.get("f12", "")
+        meta = candidates.get(code)
+        if not meta:
+            continue
         try:
             price = float(q.get("f2", 0))
         except:
             price = 0
-        if code in candidates:
-            price_map[code] = {
-                "price": price,
-                "change": float(str(q.get("f3", "0")).replace("%", "")),
-            }
+        try:
+            change = float(str(q.get("f3", "0")).replace("%", ""))
+        except:
+            change = 0
+        # 格式自愈：A股涨跌幅上限20%，|change|>25 必为×100脏数据；
+        # 价格超过触发价/成本10倍同样视为×100（08-18误报根因）
+        if abs(change) > 25:
+            change /= 100
+        if price > 0:
+            ref = meta["trigger"] or meta.get("cost", 0) or 0
+            if ref > 0 and price > ref * 10:
+                price /= 100
+        price_map[code] = {"price": price, "change": change}
 
     state = load_state()
     today = now.strftime("%Y%m%d")

@@ -25,3 +25,9 @@ jobs:
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
+
+      - name: 提交状态文件（跨次去重）
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "价格异动状态更新"
+          file_pattern: price_alert_state.json

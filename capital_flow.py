@@ -1,11 +1,12 @@
 """
-聪明钱联动哨兵 v1.3（任务⑦）
+聪明钱联动哨兵 v1.4（任务⑦）
 功能：持仓股+买入候选的主力资金流向（聪明钱信号）
 数据源：Tushare moneyflow（个股资金流向）
 联动：聪明钱流入+接近触发价=强买点；聪明钱流出持仓=警示
 运行：收盘后 17:30
-v1.3变更：
-  1. 修复 f2 单位bug：东财push2接口 f2 就是元，去掉 /100（与盘中异动v5一致）；
+v1.4变更：
+  1. 撤销 v1.3 的"f2 就是元"判断（08-18实测东财返回×100格式，v1.3 误判导致
+     gap 过滤永远不命中、候选全部漏报）；改为 gap 过滤处格式自愈归一化；
   2. 每只股票打印 数据行数/净流入，moneyflow 返回空时明确提示，日志自带诊断；
   3. end_date 用当天（收盘后跑，当天数据已出），避免周末日期空窗。
 """
@@ -119,7 +120,7 @@ def main():
     for q in quotes:
         code = q.get("f12", "")
         try:
-            price = float(q.get("f2", 0))   # v1.3: f2 就是元，不再 /100
+            price = float(q.get("f2", 0))   # v1.4: 原样读，gap过滤处自愈归一化（08-18实测东财返回×100）
         except:
             price = 0
         if code:
@@ -130,8 +131,11 @@ def main():
         if tp <= 0 or code in targets or code in EXCLUDE:
             continue
         price = quote_map.get(code, 0)
-        if price > 0 and (price - tp) / tp * 100 <= GAP_LIMIT:
-            targets[code] = {"name": info.get("name", code), "is_hold": False, "trigger": tp}
+        if price > 0:
+            if price > tp * 10:            # 东财格式自愈：超过触发价10倍视为×100
+                price /= 100
+            if (price - tp) / tp * 100 <= GAP_LIMIT:
+                targets[code] = {"name": info.get("name", code), "is_hold": False, "trigger": tp}
 
     if not targets:
         print("[WARN] 监控目标为空（持仓+候选都为0），请检查 framework_state.json")
