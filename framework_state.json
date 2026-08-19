@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-08-19T08:40:06.427781",
+    "updated": "2026-08-19T14:07:05.288442",
     "total_capital": 600000
   },
   "trigger": {
@@ -63,7 +63,7 @@
       "name": "长江电力",
       "trigger_price": 21.67,
       "anchor_pct": 4.5,
-      "dps": 0.943,
+      "dps": 1.0,
       "current_price": 28.42,
       "gap_pct": 29.3,
       "status": "远离",
@@ -302,7 +302,7 @@
       "name": "海尔智家",
       "trigger_price": 20.0,
       "anchor_pct": 0,
-      "dps": 0.538,
+      "dps": 1.43,
       "current_price": 21.97,
       "gap_pct": 8.8,
       "status": "接近",
