@@ -2,21 +2,41 @@ name: 大宗商品监控
 
 on:
   schedule:
-    - cron: '0 0 * * 1-5'
-  workflow_dispatch:
+    # 每工作日北京时间18:00（UTC 10:00）
+    # 脚本内部按星期几分流：碳酸锂+MDI每天，其余仅周一
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch:  # 手动触发
 
 jobs:
-  commodity-monitor:
+  monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置Python
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - run: pip install akshare requests
-      - name: 大宗商品监控
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          pip install akshare requests
+
+      - name: 运行商品监控
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
         run: python commodity_monitor.py
+
+      - name: 提交价格快照
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add commodity_prices.json
+          git diff --staged --quiet || git commit -m "📊 商品价格更新 $(date +%Y-%m-%d)"
+          git push || true
