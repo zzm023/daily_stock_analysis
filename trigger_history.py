@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-触发价历史追溯 + 校准提醒 v11
-1. 股息率锚校准（新增）：dps/锚定股息率 对应价 vs 触发价，偏离±15%提醒
-2. 近期波动验证（保留）：触发价 vs 近60日低点（Tushare daily）
-铁律：只提醒，不自动改触发价
+触发价历史追溯 + 校准提醒 v12
+1. 股息率锚校准（保留）：dps/锚定股息率 对应价 vs 触发价，偏离±15%提醒
+2. 近期波动验证（升级）：多窗口低点 60/90/180/250自然日 + 低点日期
+   - 主窗口按属性分层：①永续债/③周期→250 ②高息→180 ④⑤⑥/科技→90
+   - 穿透深度分档：≤5%观察 | 5~15%下修审查 | >15%基本面复查
+   - 多窗口共振（≥2档穿透）单独提示
+铁律：只提醒，不自动改触发价。价格新低≠下修理由，仅基本面锚(dps/EPS/扣非)变化才下修。
 数据源：framework_state.json + Tushare daily
 运行：周一 08:00
 """
 import os
 import json
-import time
 import requests
 from datetime import datetime, timedelta, timezone
 import tushare
@@ -19,7 +21,33 @@ TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
 PUSHPLUS_TOPIC = os.environ.get("PUSHPLUS_TOPIC", "")
 
-THRESHOLD = 15.0  # 股息率锚偏离阈值 ±15%
+THRESHOLD = 15.0            # 股息率锚偏离阈值 ±15%
+MAX_LOOKBACK = 250          # 拉数上限（自然日）。③周期股理想500，受上限约束主窗口取250
+WINDOWS = [60, 90, 180, 250]  # 多窗口低点
+BATCH = 20                  # tushare daily 单次行数限制，分片拉取
+
+# 主窗口分层（自然日），与 earnings_monitor.py 的 ALL_STOCKS 属性表一致：
+# ①永续债/③周期→250（周期理想500，受数据上限约束） ②高息→180 其余→90
+MAIN_WINDOW = {
+    # ①永续债
+    "600036": 250, "601601": 250, "600018": 250, "601816": 250,
+    "600900": 250, "600941": 250, "600406": 250, "600598": 250,
+    "603568": 250, "600007": 250, "000429": 250,
+    # ②高息成长
+    "000895": 180, "000848": 180,
+    # ③周期拐点
+    "000157": 250, "600585": 250, "000792": 250, "600188": 250,
+    "002601": 250, "600299": 250, "300498": 250,
+}
+
+
+def main_window(code, t):
+    """主窗口：映射表优先 → 有股息锚兜底180 → 默认90"""
+    if code in MAIN_WINDOW:
+        return MAIN_WINDOW[code]
+    if t.get("dps") and t.get("anchor_pct"):
+        return 180
+    return 90
 
 
 def load_state():
@@ -58,26 +86,45 @@ def get_latest_trade_date(pro, now):
     return None
 
 
-def fetch_recent_lows(pro, codes, latest_td):
-    """Tushare daily 批量拿近90日最低价"""
-    lows = {}
-    ts_codes = ",".join(to_ts_code(c) for c in codes)
-    start = (datetime.strptime(latest_td, "%Y%m%d") - timedelta(days=90)).strftime("%Y%m%d")
-    try:
-        df = pro.daily(ts_code=ts_codes, start_date=start, end_date=latest_td,
-                       fields="ts_code,low")
-        if df is not None and not df.empty:
-            for code in codes:
-                tsc = to_ts_code(code)
-                sub = df[df["ts_code"] == tsc]
-                if not sub.empty:
-                    try:
-                        lows[code] = float(sub["low"].min())
-                    except:
-                        pass
-    except Exception as e:
-        print(f"  [daily] {e}")
-    return lows
+def fetch_lows(pro, codes, latest_td):
+    """分片拉近250自然日 daily，返回 {code: {win: {"date":..,"low":..}}}"""
+    ts_codes = [to_ts_code(c) for c in codes]
+    start = (datetime.strptime(latest_td, "%Y%m%d") - timedelta(days=MAX_LOOKBACK)).strftime("%Y%m%d")
+    raw = {}
+    for i in range(0, len(ts_codes), BATCH):
+        batch = ts_codes[i:i + BATCH]
+        try:
+            df = pro.daily(ts_code=",".join(batch), start_date=start, end_date=latest_td,
+                           fields="ts_code,trade_date,low")
+        except Exception as e:
+            print(f"  [daily] {e}")
+            continue
+        if df is None or df.empty:
+            continue
+        for _, row in df.iterrows():
+            try:
+                d = str(row["trade_date"])
+                l = float(row["low"])
+                raw.setdefault(str(row["ts_code"]), []).append((d, l))
+            except Exception:
+                continue
+
+    latest_dt = datetime.strptime(latest_td, "%Y%m%d")
+    result = {}
+    for code in codes:
+        rows = raw.get(to_ts_code(code), [])
+        if not rows:
+            continue
+        entry = {}
+        for n in WINDOWS:
+            cutoff = (latest_dt - timedelta(days=n)).strftime("%Y%m%d")
+            sub = [(d, l) for d, l in rows if d >= cutoff]
+            if sub:
+                d, l = min(sub, key=lambda r: r[1])
+                entry[n] = {"date": d, "low": l}
+        if entry:
+            result[code] = entry
+    return result
 
 
 def push(title, content):
@@ -95,9 +142,14 @@ def push(title, content):
         print(f"[PushPlus] {e}")
 
 
+def fmt_date(d):
+    """'YYYYMMDD' → 'YY-MM-DD'"""
+    return f"{d[2:4]}-{d[4:6]}-{d[6:]}" if len(d) >= 8 else d
+
+
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
-    print(f"[START] 触发价追溯+校准 v11 {now:%Y-%m-%d}")
+    print(f"[START] 触发价追溯+校准 v12 {now:%Y-%m-%d}")
 
     if not TUSHARE_TOKEN:
         print("[SKIP] 未配置 TUSHARE_TOKEN")
@@ -113,7 +165,7 @@ def main():
         return
 
     codes = [c for c in trigger if isinstance(trigger.get(c), dict)]
-    lows = fetch_recent_lows(pro, codes, latest_td)
+    lows = fetch_lows(pro, codes, latest_td)
     print(f"  近期低点覆盖: {len(lows)}/{len(codes)}")
 
     # ── 1. 股息率锚校准 ──
@@ -131,28 +183,49 @@ def main():
         if abs(dev) >= THRESHOLD:
             anchor_alerts.append((name, code, tp, target, dev, dps, anchor))
 
-    # ── 2. 近期波动验证 ──
-    hit, close, far = [], [], []
+    # ── 2. 近期波动验证（主窗口分层 + 多窗口低点） ──
+    pierced, close, far = [], [], []
     for code in codes:
         t = trigger[code]
         tp = t.get("trigger_price", 0)
         name = t.get("name", code)
-        low = lows.get(code)
-        if not tp or low is None:
+        entry = lows.get(code)
+        if not tp or not entry:
             continue
+        win = main_window(code, t)
+        w = entry.get(win)
+        if not w:
+            continue
+        low, low_date = w["low"], w["date"]
         if low <= tp:
-            gap = round((tp - low) / low * 100, 1)
-            hit.append((name, tp, low, gap))
+            depth = round((tp - low) / low * 100, 1)
+            pierced.append((name, code, tp, low, low_date, win, depth))
         else:
             gap = round((low - tp) / tp * 100, 1)
             if gap <= 5:
-                close.append((name, tp, low, gap))
+                close.append((name, code, tp, low, low_date, win, gap))
             else:
-                far.append((name, tp, low, gap))
+                far.append((name, code, tp, low, low_date, win, gap))
+
+    watch = [p for p in pierced if p[6] <= 5]      # 穿透≤5% 观察
+    review = [p for p in pierced if 5 < p[6] <= 15]  # 穿透5~15% 下修审查
+    alarm = [p for p in pierced if p[6] > 15]      # 穿透>15% 基本面复查
+
+    # 多窗口共振：≥2档窗口低点均≤触发价
+    resonance = []
+    for code in codes:
+        t = trigger[code]
+        tp = t.get("trigger_price", 0)
+        entry = lows.get(code)
+        if not tp or not entry:
+            continue
+        hits = {n: entry[n] for n in WINDOWS if n in entry and entry[n]["low"] <= tp}
+        if len(hits) >= 2:
+            resonance.append((t.get("name", code), code, tp, hits))
 
     # ── 3. 推送 ──
     lines = [f"## 🎯 触发价追溯+校准 {now:%m.%d}", "",
-             f"> 数据日 {latest_td} | 近期低点覆盖 {len(lows)}/{len(codes)}", ""]
+             f"> 数据日 {latest_td} | 低点覆盖 {len(lows)}/{len(codes)}", ""]
 
     # 股息率锚校准部分
     if anchor_alerts:
@@ -169,32 +242,59 @@ def main():
         lines.append("")
 
     # 近期波动验证部分
-    lines.append(f"### 近期波动验证（近90日低点 vs 触发价）")
+    lines.append("### 近期波动验证（主窗口：①③=250 ②=180 其余=90 自然日）")
     lines.append("")
-    lines.append(f"> 触发过 {len(hit)} | 距触发≤5% {len(close)} | 偏严 {len(far)}")
+    lines.append(f"> 已击球区 {len(pierced)} | 距触发≤5% {len(close)} | 偏严 {len(far)}")
     lines.append("")
 
-    if hit:
-        lines.append(f"**触发过（价合理）**")
-        for name, tp, low, gap in sorted(hit, key=lambda x: -x[3])[:8]:
-            lines.append(f"- {name} 触发{tp:.2f} 近期低{low:.2f} 穿透{gap}%")
+    if pierced:
+        if watch:
+            lines.append("**🟡 穿透≤5% · 观察（核对分层买入执行）**")
+            for name, code, tp, low, d, win, depth in sorted(watch, key=lambda x: -x[6])[:8]:
+                lines.append(f"- {name} 触发{tp:.2f} {win}日低{low:.2f}({fmt_date(d)}) 穿透{depth}%")
+            lines.append("")
+        if review:
+            lines.append("**🔶 穿透5~15% · 下修审查（核 dps/EPS/扣非；无恶化→维持，折扣扩大=机会）**")
+            for name, code, tp, low, d, win, depth in sorted(review, key=lambda x: -x[6])[:8]:
+                lines.append(f"- {name} 触发{tp:.2f} {win}日低{low:.2f}({fmt_date(d)}) 穿透{depth}%")
+            lines.append("")
+        if alarm:
+            lines.append("**🔴 穿透>15% · 基本面复查（锚可能失效，重新深度分析）**")
+            for name, code, tp, low, d, win, depth in sorted(alarm, key=lambda x: -x[6])[:8]:
+                lines.append(f"- {name} 触发{tp:.2f} {win}日低{low:.2f}({fmt_date(d)}) 穿透{depth}%")
+            lines.append("")
+    else:
+        lines.append("**✅ 无穿透**")
         lines.append("")
+
     if close:
-        lines.append(f"**距触发≤5%（接近）**")
-        for name, tp, low, gap in sorted(close, key=lambda x: x[3])[:10]:
-            lines.append(f"- {name} 触发{tp:.2f} 近期低{low:.2f} 距{gap}%")
+        lines.append("**距触发≤5%（接近）**")
+        for name, code, tp, low, d, win, gap in sorted(close, key=lambda x: x[6])[:10]:
+            lines.append(f"- {name} 触发{tp:.2f} {win}日低{low:.2f}({fmt_date(d)}) 距{gap}%")
         lines.append("")
     if far:
         lines.append(f"**距触发>5%（偏严，{len(far)}只）**")
-        for name, tp, low, gap in sorted(far, key=lambda x: x[3])[:8]:
-            lines.append(f"- {name} 触发{tp:.2f} 近期低{low:.2f} 距{gap}%")
+        for name, code, tp, low, d, win, gap in sorted(far, key=lambda x: x[6])[:8]:
+            lines.append(f"- {name} 触发{tp:.2f} {win}日低{low:.2f}({fmt_date(d)}) 距{gap}%")
+        lines.append("")
+
+    if resonance:
+        lines.append("**⚠️ 多窗口共振（≥2档穿透，真信号）**")
+        for name, code, tp, hits in resonance[:10]:
+            parts = []
+            for n in sorted(hits):
+                parts.append(f"{n}日低{hits[n]['low']:.2f}({fmt_date(hits[n]['date'])})")
+            lines.append(f"- {name} 触发{tp:.2f} | " + " | ".join(parts))
         lines.append("")
 
     lines.append("---")
-    lines.append(f"只提醒不自动改触发价 | {now:%m-%d %H:%M}")
+    lines.append("只提醒不自动改触发价 | 下修决策树：价格新低≠下修，仅dps/EPS/扣非锚变化才下修 | "
+                 + f"{now:%m-%d %H:%M}")
 
     push(f"🎯 触发价追溯+校准 {now:%m.%d}", "\n".join(lines))
-    print(f"[DONE] 股息锚偏离{len(anchor_alerts)} 触发过{len(hit)} 接近{len(close)} 偏严{len(far)}")
+    print(f"[DONE] 股息锚偏离{len(anchor_alerts)} 击球{len(pierced)}"
+          f"(观察{len(watch)}/审查{len(review)}/复查{len(alarm)}) "
+          f"接近{len(close)} 偏严{len(far)} 共振{len(resonance)}")
 
 
 if __name__ == "__main__":
