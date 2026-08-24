@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-08-24T01:50:04",
+    "updated": "2026-08-24T02:04:41.342410",
     "total_capital": 600000
   },
   "trigger": {
@@ -75,7 +75,7 @@
       "name": "中国移动",
       "trigger_price": 88.5,
       "anchor_pct": 5.5,
-      "dps": 4.87,
+      "dps": 4.704,
       "current_price": 96.25,
       "gap_pct": 8.8,
       "status": "接近",
@@ -311,7 +311,7 @@
       "name": "海尔智家",
       "trigger_price": 20.0,
       "anchor_pct": 0,
-      "dps": 0.538,
+      "dps": 1.43,
       "current_price": 21.75,
       "gap_pct": 8.8,
       "status": "接近",
@@ -450,7 +450,7 @@
       "name": "分众传媒",
       "trigger_price": 4.3,
       "anchor_pct": 3.5,
-      "dps": 0.15,
+      "dps": 0.34,
       "current_price": 4.9,
       "gap_pct": 14.0,
       "status": "远离",
@@ -642,7 +642,7 @@
       "name": "思维列控",
       "trigger_price": 17.0,
       "anchor_pct": 0,
-      "dps": 0.525,
+      "dps": 2.625,
       "current_price": 21.2,
       "gap_pct": 24.7,
       "status": "远离",
@@ -694,7 +694,7 @@
       "name": "时代电气",
       "trigger_price": 38.0,
       "anchor_pct": 0,
-      "dps": 1.58,
+      "dps": 1.12,
       "current_price": 47.6,
       "gap_pct": 25.3,
       "status": "远离",
