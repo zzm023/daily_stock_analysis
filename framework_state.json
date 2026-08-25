@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-08-25T12:32:00",
+    "updated": "2026-08-25T13:30:00",
     "total_capital": 600000
   },
   "trigger": {
@@ -485,25 +485,6 @@
       "div_ok": false,
       "tag": "7_战术观察"
     },
-    "603605": {
-      "name": "珀莱雅",
-      "trigger_price": 55.0,
-      "anchor_pct": 3.5,
-      "dps": 2.0,
-      "current_price": 60.88,
-      "gap_pct": 10.7,
-      "status": "接近",
-      "pe_upper": 16,
-      "pb_lower": 4.0,
-      "pe_now": 12.9,
-      "pb_now": 3.62,
-      "resonance": "🟢 双振",
-      "resonance_score": 2,
-      "pe_ok": true,
-      "pb_ok": true,
-      "div_ok": false,
-      "tag": "7_战术观察"
-    },
     "605098": {
       "name": "行动教育",
       "trigger_price": 44.0,
@@ -555,25 +536,6 @@
       "status": "远离",
       "pe_upper": 14,
       "pb_lower": 2.5,
-      "tag": "7_战术观察"
-    },
-    "002032": {
-      "name": "苏泊尔",
-      "trigger_price": 36.0,
-      "anchor_pct": 0,
-      "dps": 2.63,
-      "current_price": 41.68,
-      "gap_pct": 4.2,
-      "status": "接近",
-      "pe_upper": 18,
-      "pb_lower": 4.0,
-      "pe_now": 16.1,
-      "pb_now": 1.19,
-      "resonance": "🟢 双振",
-      "resonance_score": 2,
-      "pe_ok": true,
-      "pb_ok": true,
-      "div_ok": false,
       "tag": "7_战术观察"
     },
     "002884": {
