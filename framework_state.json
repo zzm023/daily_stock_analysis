@@ -1,6 +1,7 @@
 {
   "meta": {
-    "updated": "2026-08-25T01:44:45",
+
+    "updated": "2026-08-25T12:18:00",
     "total_capital": 600000
   },
   "trigger": {
@@ -488,15 +489,16 @@
     "603605": {
       "name": "珀莱雅",
       "trigger_price": 55.0,
-      "anchor_pct": 0,
+      "anchor_pct": 3.5,
       "dps": 2.0,
-      "current_price": 58.88,
-      "gap_pct": 7.1,
+      "current_price": 60.88,
+      "gap_pct": 10.7,
       "status": "接近",
       "pe_upper": 16,
       "pb_lower": 4.0,
-      "pe_now": 12.6,
-      "pb_now": 3.77,
+
+      "pe_now": 12.9,
+      "pb_now": 3.62,
       "resonance": "🟢 双振",
       "resonance_score": 2,
       "pe_ok": true,
