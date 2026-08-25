@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-08-25T08:33:15",
+    "updated": "2026-08-25T20:08:00",
     "total_capital": 600000
   },
   "trigger": {
@@ -247,14 +247,14 @@
       "name": "温氏股份",
       "trigger_price": 0,
       "anchor_pct": 0,
-      "dps": 0.5,
-      "current_price": 13.77,
+      "dps": 0.2,
+      "current_price": 14.13,
       "gap_pct": 99,
       "status": "远离",
       "pe_upper": 15,
       "pb_lower": 1.5,
-      "tag": "7_战术观察",
-      "note": "已持股，不再加仓"
+      "tag": "3_周期拐点",
+      "note": "已持股4000股@13.794，不再加仓；减仓B方案：维持持股等周期反转信号，不冻结其他周期股（2026-08-25裁决）"
     },
     "000651": {
       "name": "格力电器",
