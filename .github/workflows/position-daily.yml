@@ -2,7 +2,7 @@ name: ๆไป“ๆ—ฅๆฅ
 
 on:
   schedule:
-    - cron: '30 0 * * 1-5'
+    - cron: '30 0 * * 1-5'  # 08:30 CST นคื๗ศี (schedule-kick 2026-11-09)
   workflow_dispatch:
 
 jobs:
