@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-11-16T06:09:19",
+    "updated": "2026-11-16T07:02:05.921841",
     "total_capital": 600000
   },
   "trigger": {
@@ -874,7 +874,7 @@
       "name": "海康威视",
       "trigger_price": 30.0,
       "anchor_pct": 0,
-      "dps": 1.3,
+      "dps": 1.55,
       "current_price": 34.25,
       "gap_pct": 19.7,
       "status": "远离",
